@@ -29,7 +29,7 @@ from baukit import TraceDict
 
 # spherical_steering.py lives in parent directory (ICML2026/)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from spherical_steering import get_spherical_intervention
+from steering_artifacts import load_steering_artifact, build_intervention
 from utils_generic import HF_NAMES, MMLU_CATEGORIES, set_seed
 
 
@@ -322,6 +322,7 @@ def main():
     parser.add_argument('--model_dir', type=str, default=None,
                         help="Local model directory (overrides model_name)")
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--steering-geometry', choices=['auto', 'sphere', 'ellipsoid'], default='auto')
 
     args = parser.parse_args()
     set_seed(args.seed)
@@ -336,9 +337,7 @@ def main():
 
     # Load prototypes
     print(f"Loading prototypes: {args.prototype_path}")
-    data = np.load(args.prototype_path)
-    mu_T = torch.tensor(data['mu_T'], dtype=torch.float32, device=device)
-    mu_H = torch.tensor(data['mu_H'], dtype=torch.float32, device=device)
+    artifact = load_steering_artifact(args.prototype_path, device)
 
     # Setup steering hook
     layer_name = f"model.layers.{args.layer}"
@@ -349,8 +348,9 @@ def main():
         hook_fn = None
     else:
         print(f">> Mode: STEERING (kappa={args.kappa}, alpha={args.alpha}, beta={args.beta})")
-        hook_fn = get_spherical_intervention(
-            mu_T, mu_H, args.kappa, args.alpha, args.beta, stats=steering_stats)
+        hook_fn = build_intervention(
+            artifact, args.kappa, args.alpha, args.beta, stats=steering_stats,
+            steering_geometry=args.steering_geometry)
 
     # Dispatch evaluation
     if args.dataset == 'copa':

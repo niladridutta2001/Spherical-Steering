@@ -55,6 +55,12 @@ python get_prototypes_generic.py \
   --feature_file ./features_generic/llama3.1-8B-Instruct_storycloze_train_l27.npz
 ```
 
+Add `--geometry ellipsoid-diag --covariance-source pooled` for diagonal
+Mahalanobis geometry, or `--geometry ellipsoid-lowrank --cov-rank 128` for the
+matrix-free low-rank representation. Evaluation discovers the artifact type by
+default; `--steering-geometry {auto,sphere,ellipsoid}` can make the choice
+explicit.
+
 Step 3: evaluate steering
 
 ```bash

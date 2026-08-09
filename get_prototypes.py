@@ -25,6 +25,7 @@ import argparse
 import numpy as np
 import os
 from sklearn.model_selection import KFold
+from ellipsoid_geometry import fit_ellipsoid_geometry
 
 
 def normalize(v):
@@ -93,8 +94,19 @@ def main():
         default='./prototypes',
         help="Directory to save prototypes"
     )
+    parser.add_argument('--geometry', choices=['sphere', 'ellipsoid-diag', 'ellipsoid-lowrank'],
+                        default='sphere')
+    parser.add_argument('--covariance-source', choices=['pooled', 'global'], default='pooled')
+    parser.add_argument('--shrinkage', type=float, default=0.1)
+    parser.add_argument('--variance-floor', type=float, default=1e-5)
+    parser.add_argument('--cov-rank', type=int, default=128)
+    parser.add_argument('--radius-quantiles', default='0.5,0.9,0.95,0.99')
     
     args = parser.parse_args()
+    try:
+        radius_quantiles = tuple(float(x) for x in args.radius_quantiles.split(','))
+    except ValueError as exc:
+        raise ValueError("--radius-quantiles must be comma-separated numbers") from exc
     
     # Load features
     print(f"Loading features from {args.feature_file}...")
@@ -136,18 +148,32 @@ def main():
         print(f"Train: {len(X_train)} samples from {len(train_qs)} questions")
         print(f"Test:  {len(X_test)} samples from {len(test_qs)} questions")
         
-        # Compute prototypes
-        mu_T, mu_H, cos_sim = compute_contrastive_prototypes(X_train, y_train)
+        # Fit exclusively on this fold's training activations.
+        if args.geometry == 'sphere':
+            mu_T, mu_H, _ = compute_contrastive_prototypes(X_train, y_train)
+            artifact = dict(mu_T=mu_T, mu_H=mu_H, center=np.mean(X_train, axis=0))
+        else:
+            fitted = fit_ellipsoid_geometry(
+                X_train, y_train, geometry=args.geometry,
+                covariance_source=args.covariance_source,
+                shrinkage=args.shrinkage, variance_floor=args.variance_floor,
+                cov_rank=args.cov_rank, radius_quantiles=radius_quantiles)
+            artifact = {k: v for k, v in fitted.items() if k not in ('m_T', 'm_H')}
         
         # Save prototypes
         save_path = os.path.join(args.save_dir, f"{base_name}_fold{fold_idx}.npz")
-        np.savez(
-            save_path,
-            mu_T=mu_T,
-            mu_H=mu_H,
-            test_q_indices=test_qs,
-            fold_idx=fold_idx,
-        )
+        artifact.update(
+            artifact_version=np.array(2, dtype=np.int64),
+            geometry=np.array(args.geometry),
+            covariance_source=np.array(args.covariance_source),
+            shrinkage=np.array(args.shrinkage, dtype=np.float32),
+            variance_floor=np.array(args.variance_floor, dtype=np.float32),
+            cov_rank=np.array(artifact.get('cov_rank', 0), dtype=np.int64),
+            test_q_indices=test_qs, fold_idx=np.array(fold_idx, dtype=np.int64))
+        artifact = {k: (v.astype(np.float32) if isinstance(v, np.ndarray) and
+                         np.issubdtype(v.dtype, np.floating) else v)
+                    for k, v in artifact.items()}
+        np.savez(save_path, **artifact)
         print(f"Saved to {save_path}")
     
     print(f"\n{'='*60}")

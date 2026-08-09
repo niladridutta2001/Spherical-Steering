@@ -10,7 +10,7 @@ Usage:
         --layer 14 --kappa 20.0 --alpha 0.6 --beta -0.05
 """
 
-import argparse, os, re, random, gc
+import argparse, os, re, random, gc, json
 from functools import partial
 
 import torch
@@ -21,7 +21,8 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from baukit import TraceDict
 
-from spherical_steering import get_spherical_intervention
+from steering_artifacts import (load_steering_artifact, build_intervention,
+                                evaluation_diagnostics)
 
 # ==================== Constants ====================
 
@@ -172,6 +173,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='./results_llm_judge')
     parser.add_argument('--max_samples', type=int, default=None)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--steering-geometry', choices=['auto', 'sphere', 'ellipsoid'], default='auto')
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -190,10 +192,10 @@ def main():
 
     # Load prototypes
     print(f"Loading prototypes: {args.prototype_path}")
-    data = np.load(args.prototype_path)
-    mu_T = torch.tensor(data['mu_T'], dtype=torch.float32, device=device)
-    mu_H = torch.tensor(data['mu_H'], dtype=torch.float32, device=device)
-    test_q_indices = set(data['test_q_indices'])
+    artifact = load_steering_artifact(args.prototype_path, device)
+    if 'test_q_indices' not in artifact:
+        raise ValueError("TruthfulQA artifacts must contain test_q_indices")
+    test_q_indices = set(artifact['test_q_indices'])
     fold_match = re.search(r'fold(\d+)', args.prototype_path)
     fold_idx = int(fold_match.group(1)) if fold_match else 0
     print(f"Fold: {fold_idx} | Test questions: {len(test_q_indices)}")
@@ -206,8 +208,9 @@ def main():
         base_hook_fn = None
     else:
         print(f"Steering: ON (kappa={args.kappa}, alpha={args.alpha}, beta={args.beta})")
-        base_hook_fn = get_spherical_intervention(
-            mu_T, mu_H, args.kappa, args.alpha, args.beta, stats=steering_stats)
+        base_hook_fn = build_intervention(
+            artifact, args.kappa, args.alpha, args.beta, stats=steering_stats,
+            steering_geometry=args.steering_geometry)
 
     # Load questions from HuggingFace dataset
     hf_dataset = load_dataset("truthful_qa", "multiple_choice")['validation']
@@ -254,6 +257,9 @@ def main():
     out_file = os.path.join(args.output_dir,
                             f"{args.model_name}_l{args.layer}_fold{fold_idx}_{sfx}_{pfx}.csv")
     pd.DataFrame(results).to_csv(out_file, index=False)
+    diagnostic_file = out_file.replace('.csv', '_diagnostics.json')
+    with open(diagnostic_file, 'w') as f:
+        json.dump(evaluation_diagnostics(artifact, steering_stats), f, indent=2)
 
     # Print summary
     print(f"\n{'='*50}")
@@ -264,6 +270,7 @@ def main():
     print(f"Truth: {avg_truth:.4f} | Info: {avg_info:.4f} | T*I: {avg_truth*avg_info:.4f}")
     print(f"Truth Acc: {truth_acc:.4f} | Info Acc: {info_acc:.4f}")
     print(f"Saved to: {out_file}")
+    print(f"Diagnostics: {diagnostic_file}")
     print(f"{'='*50}")
 
     # Append to summary CSV
@@ -278,6 +285,7 @@ def main():
         k = 0.0 if args.disable_steering else args.kappa
         f.write(f"{args.model_name},{args.layer},{fold_idx},{a},{b},{k},{args.preset},{steer},{avg_truth:.4f},{avg_info:.4f},{avg_truth*avg_info:.4f},{truth_acc:.4f},{info_acc:.4f}\n")
     print(f"Summary: {summary}")
+    print("Steering diagnostics:", evaluation_diagnostics(artifact, steering_stats))
 
 
 if __name__ == "__main__":

@@ -57,6 +57,80 @@ git clone https://github.com/sylinrl/TruthfulQA.git
 
 ## Usage
 
+### Steering geometries
+
+The original spherical method normalizes an activation `h` and rotates it on a
+Euclidean sphere. It remains the default and its implementation is unchanged.
+Mahalanobis ellipsoidal steering instead estimates a center `c` and covariance
+`Sigma` from calibration data, maps activations to whitened coordinates
+`z = Sigma^(-1/2)(h-c)`, follows a spherical geodesic there, and maps back. It
+therefore preserves `||z||`, equivalently the Mahalanobis radius. This is a
+geodesic under the constant Mahalanobis metric; it is not claimed to be an
+ambient-Euclidean geodesic of an ellipsoid.
+
+Covariance controls ellipsoid axes: eigenvectors determine orientation and the
+square roots of eigenvalues determine axis sizes. `ellipsoid-diag` stores only
+per-coordinate variances and is the recommended low-memory baseline.
+`ellipsoid-lowrank` stores leading axis directions plus an isotropic residual;
+it captures correlations without allocating a dense hidden-dimension-squared
+matrix, at additional fitting and inference cost. Pooled within-class
+covariance is recommended because the class mean difference does not inflate an
+axis. The ellipsoid is a calibration-data geometry estimator, not a learned
+model.
+
+Extract activations once, then create diagonal artifacts:
+
+```bash
+python get_activations.py llama3.1-8B-Instruct --layer 14 --save_dir ./features
+python get_prototypes.py \
+  --feature_file ./features/llama3.1-8B-Instruct_layer14.npz \
+  --save_dir ./prototypes_ellipsoid_diag \
+  --geometry ellipsoid-diag --covariance-source pooled \
+  --shrinkage 0.1 --variance-floor 1e-5
+python evaluate_mc.py llama3.1-8B-Instruct \
+  --prototype_path ./prototypes_ellipsoid_diag/llama3.1-8B-Instruct_layer14_fold0.npz \
+  --steering-geometry auto --layer 14 --kappa 20 --alpha 0.7 --beta -0.15
+```
+
+For low rank, replace the prototype command with:
+
+```bash
+python get_prototypes.py \
+  --feature_file ./features/llama3.1-8B-Instruct_layer14.npz \
+  --save_dir ./prototypes_ellipsoid_lowrank \
+  --geometry ellipsoid-lowrank --covariance-source pooled \
+  --cov-rank 128 --shrinkage 0.1 --variance-floor 1e-5
+```
+
+Evaluation modes are baseline (`--no_intervention`), legacy/default spherical
+(omit new arguments), explicit spherical (`--steering-geometry sphere`), and
+ellipsoidal (`--steering-geometry ellipsoid`). `auto` is the default and reads
+artifact metadata. An explicit incompatible choice is rejected. Tune layer,
+`kappa`, `alpha`, `beta`, covariance settings, and rank only on training or
+validation data—not the held-out test fold.
+
+For example, the corresponding evaluation forms are:
+
+```bash
+# Baseline
+python evaluate_mc.py llama3.1-8B-Instruct --prototype_path prototypes/sphere_fold0.npz --no_intervention
+# Spherical
+python evaluate_mc.py llama3.1-8B-Instruct --prototype_path prototypes/sphere_fold0.npz --steering-geometry sphere
+# Diagonal ellipsoid
+python evaluate_mc.py llama3.1-8B-Instruct --prototype_path prototypes_ellipsoid_diag/diag_fold0.npz --steering-geometry ellipsoid
+# Low-rank ellipsoid
+python evaluate_mc.py llama3.1-8B-Instruct --prototype_path prototypes_ellipsoid_lowrank/lowrank_fold0.npz --steering-geometry ellipsoid
+```
+
+Version-2 artifacts contain `artifact_version`, `geometry`,
+`covariance_source`, `shrinkage`, `variance_floor`, `center`, `mu_T`, `mu_H`,
+fold metadata, axis sizes, and training-radius quantiles. Diagonal artifacts
+add `diag_var`; low-rank artifacts add `basis`, `eigvals`, `residual_var`, and
+`cov_rank`. Ellipsoidal prototypes live in whitened coordinates. Legacy files
+containing only prototypes and fold metadata are treated as spherical. Radius
+quantiles are diagnostics only; every activation retains its own Mahalanobis
+radius rather than being projected onto a fixed boundary.
+
 ### TruthfulQA
 
 Use the following scripts:
@@ -94,6 +168,9 @@ See `generic/README.md` for details.
 | `evaluate_mc.py` | MC1/MC2/MC3 evaluation on held-out fold questions |
 | `evaluate_llm_judge.py` | Open-ended generation + truth/info judge scoring |
 | `spherical_steering.py` | Intervention hook and geometric steering logic |
+| `ellipsoid_geometry.py` | Training-only covariance fitting and matrix-free whitening |
+| `ellipsoidal_steering.py` | Mahalanobis ellipsoidal intervention hooks |
+| `steering_artifacts.py` | Safe shared artifact loader and intervention factory |
 | `utils.py` | Data loading and activation extraction helpers |
 
 ## Citation

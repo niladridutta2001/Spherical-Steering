@@ -29,7 +29,8 @@ from truthfulqa.models import MC_calcs, set_columns
 from truthfulqa.presets import preset_map
 
 from baukit import TraceDict
-from spherical_steering import get_spherical_intervention
+from steering_artifacts import (load_steering_artifact, build_intervention,
+                                evaluation_diagnostics)
 
 # ==================== Constants ====================
 
@@ -155,6 +156,7 @@ def main():
     parser.add_argument('--output_path', type=str, default=None)
     parser.add_argument('--save_details', action='store_true')
     parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--steering-geometry', choices=['auto', 'sphere', 'ellipsoid'], default='auto')
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -174,10 +176,10 @@ def main():
 
     # Load prototypes
     print(f"Loading prototypes: {args.prototype_path}")
-    data = np.load(args.prototype_path)
-    mu_T = torch.tensor(data['mu_T'], dtype=torch.float32, device=device)
-    mu_H = torch.tensor(data['mu_H'], dtype=torch.float32, device=device)
-    test_q_indices = set(data['test_q_indices'])
+    artifact = load_steering_artifact(args.prototype_path, device)
+    if 'test_q_indices' not in artifact:
+        raise ValueError("TruthfulQA artifacts must contain test_q_indices")
+    test_q_indices = set(artifact['test_q_indices'])
 
     # Setup steering
     layer_name = f"model.layers.{args.layer}"
@@ -187,8 +189,9 @@ def main():
         base_hook_fn = None
     else:
         print(f"Steering: ON (kappa={args.kappa}, alpha={args.alpha}, beta={args.beta})")
-        base_hook_fn = get_spherical_intervention(
-            mu_T, mu_H, args.kappa, args.alpha, args.beta, stats=steering_stats)
+        base_hook_fn = build_intervention(
+            artifact, args.kappa, args.alpha, args.beta, stats=steering_stats,
+            steering_geometry=args.steering_geometry)
 
     # Load TruthfulQA CSV and align with HuggingFace dataset by question text
     df = pd.read_csv(args.csv_path)
@@ -259,7 +262,7 @@ def main():
     mc3 = results_df[f'{tag} MC3'].mean()
 
     print(f"\n{'='*50}")
-    print(f"RESULTS ({eval_mode}) | Fold: {data.get('fold_idx', '?')}")
+    print(f"RESULTS ({eval_mode}) | Fold: {artifact.get('fold_idx', '?')}")
     print(f"Model: {args.model_name} | Layer: {args.layer}")
     if not args.no_intervention:
         sp = (steering_stats['steered'] / steering_stats['total'] * 100) if steering_stats['total'] else 0
@@ -276,14 +279,16 @@ def main():
 
     os.makedirs(os.path.dirname(args.output_path) or '.', exist_ok=True)
     with open(args.output_path, 'w') as f:
-        json.dump({
+        payload = {
             'model_name': args.model_name, 'layer': args.layer,
             'kappa': args.kappa, 'alpha': args.alpha, 'beta': args.beta,
             'eval_mode': eval_mode, 'seed': args.seed,
             'no_intervention': args.no_intervention,
             'num_test_questions': len(results_df),
             'metrics': {'MC1': mc1, 'MC2': mc2, 'MC3': mc3},
-        }, f, indent=2)
+        }
+        payload.update(evaluation_diagnostics(artifact, steering_stats))
+        json.dump(payload, f, indent=2)
     print(f"Saved to: {args.output_path}")
 
     if args.save_details:
