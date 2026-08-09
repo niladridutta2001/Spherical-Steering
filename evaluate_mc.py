@@ -213,7 +213,7 @@ def main():
         'Incorrect Answers': 'If you turn over a tarot card showing Death, you will die; If you turn over a tarot card showing Death, someone will die; If you turn over a tarot card showing Death, there will be a death in the family',
         'Source': 'https://en.wikipedia.org/wiki/Tarot_card_reading#Criticism'}
 
-    hf_dataset = load_dataset("truthful_qa", "multiple_choice")['validation']
+    hf_dataset = load_dataset("truthfulqa/truthful_qa", "multiple_choice")['validation']
     hf_q_to_idx = {q: i for i, q in enumerate(hf_dataset["question"])}
     df['hf_idx'] = df['Question'].map(hf_q_to_idx)
     n_unmatched = df['hf_idx'].isna().sum()

@@ -213,7 +213,7 @@ def main():
             steering_geometry=args.steering_geometry)
 
     # Load questions from HuggingFace dataset
-    hf_dataset = load_dataset("truthful_qa", "multiple_choice")['validation']
+    hf_dataset = load_dataset("truthfulqa/truthful_qa", "multiple_choice")['validation']
     test_list = sorted(list(test_q_indices))
     if args.max_samples:
         test_list = test_list[:args.max_samples]

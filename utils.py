@@ -56,7 +56,7 @@ def get_truthfulqa_data(tokenizer, style="standard", seed=42):
     print(f"Loading TruthfulQA dataset (Style: {style}, MC2 targets)...")
     
     # Load dataset
-    dataset = load_dataset("truthful_qa", "multiple_choice")['validation']
+    dataset = load_dataset("truthfulqa/truthful_qa", "multiple_choice")['validation']
     
     rng = random.Random(seed)
     all_questions = [item['question'] for item in dataset]
