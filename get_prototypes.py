@@ -25,6 +25,7 @@ import argparse
 import numpy as np
 import os
 from sklearn.model_selection import KFold
+from sklearn.model_selection import train_test_split
 from ellipsoid_geometry import fit_ellipsoid_geometry
 
 
@@ -72,6 +73,26 @@ def compute_contrastive_prototypes(X_train, y_train):
     return mu_T, mu_H, cos_sim
 
 
+def split_question_folds(q_indices, num_folds=2, validation_fraction=0.0,
+                         shuffle_folds=False, seed=42):
+    """Yield fit/validation/test question IDs without overlap."""
+    if not 0.0 <= validation_fraction < 1.0:
+        raise ValueError("validation_fraction must satisfy 0 <= value < 1")
+    unique_questions = np.unique(q_indices)
+    kf = KFold(n_splits=num_folds, shuffle=shuffle_folds,
+               random_state=seed if shuffle_folds else None)
+    for fold_idx, (development_idx, test_idx) in enumerate(kf.split(unique_questions)):
+        development_qs = unique_questions[development_idx]
+        test_qs = unique_questions[test_idx]
+        if validation_fraction:
+            fit_qs, validation_qs = train_test_split(
+                development_qs, test_size=validation_fraction,
+                random_state=seed + fold_idx, shuffle=True)
+        else:
+            fit_qs, validation_qs = development_qs, np.array([], dtype=unique_questions.dtype)
+        yield fold_idx, np.sort(fit_qs), np.sort(validation_qs), np.sort(test_qs)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Step 2: Compute contrastive prototypes with K-Fold CV"
@@ -101,6 +122,11 @@ def main():
     parser.add_argument('--variance-floor', type=float, default=1e-5)
     parser.add_argument('--cov-rank', type=int, default=128)
     parser.add_argument('--radius-quantiles', default='0.5,0.9,0.95,0.99')
+    parser.add_argument('--validation-fraction', type=float, default=0.0,
+                        help='Fraction of each development fold reserved for tuning')
+    parser.add_argument('--shuffle-folds', action='store_true',
+                        help='Randomize outer question folds reproducibly')
+    parser.add_argument('--seed', type=int, default=42)
     
     args = parser.parse_args()
     try:
@@ -121,32 +147,26 @@ def main():
     unique_questions = np.unique(q_indices)
     print(f"Total unique questions: {len(unique_questions)}")
     
-    kf = KFold(n_splits=args.num_folds, shuffle=False)
-    
     os.makedirs(args.save_dir, exist_ok=True)
     
     # Get base name for output files
     base_name = os.path.basename(args.feature_file).replace('.npz', '')
     
-    for fold_idx, (train_q_idx, test_q_idx) in enumerate(kf.split(unique_questions)):
+    folds = split_question_folds(
+        q_indices, args.num_folds, args.validation_fraction,
+        args.shuffle_folds, args.seed)
+    for fold_idx, train_qs, validation_qs, test_qs in folds:
         print(f"\n{'='*60}")
         print(f"Processing Fold {fold_idx + 1}/{args.num_folds}")
         print(f"{'='*60}")
         
-        train_qs = unique_questions[train_q_idx]
-        test_qs = unique_questions[test_q_idx]
-        
-        # Create train/test masks
+        # Create masks. Geometry is fitted from train_mask only.
         train_mask = np.isin(q_indices, train_qs)
-        test_mask = np.isin(q_indices, test_qs)
-        
         X_train = X[train_mask]
         y_train = y[train_mask]
-        X_test = X[test_mask]
-        y_test = y[test_mask]
-        
         print(f"Train: {len(X_train)} samples from {len(train_qs)} questions")
-        print(f"Test:  {len(X_test)} samples from {len(test_qs)} questions")
+        print(f"Validation: {len(validation_qs)} questions")
+        print(f"Test: {len(test_qs)} questions")
         
         # Fit exclusively on this fold's training activations.
         if args.geometry == 'sphere':
@@ -169,7 +189,11 @@ def main():
             shrinkage=np.array(args.shrinkage, dtype=np.float32),
             variance_floor=np.array(args.variance_floor, dtype=np.float32),
             cov_rank=np.array(artifact.get('cov_rank', 0), dtype=np.int64),
-            test_q_indices=test_qs, fold_idx=np.array(fold_idx, dtype=np.int64))
+            train_q_indices=train_qs, validation_q_indices=validation_qs,
+            test_q_indices=test_qs, fold_idx=np.array(fold_idx, dtype=np.int64),
+            split_seed=np.array(args.seed, dtype=np.int64),
+            validation_fraction=np.array(args.validation_fraction, dtype=np.float32),
+            shuffled_folds=np.array(args.shuffle_folds))
         artifact = {k: (v.astype(np.float32) if isinstance(v, np.ndarray) and
                          np.issubdtype(v.dtype, np.floating) else v)
                     for k, v in artifact.items()}

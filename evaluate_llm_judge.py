@@ -30,6 +30,7 @@ HF_NAMES = {
     'llama3.1-8B': 'meta-llama/Llama-3.1-8B',
     'llama3.1-8B-Instruct': 'meta-llama/Llama-3.1-8B-Instruct',
     'Qwen2.5-7B-Instruct': 'Qwen/Qwen2.5-7B-Instruct',
+    'Qwen2.5-3B-Instruct': 'Qwen/Qwen2.5-3B-Instruct',
 }
 
 TRUTH_JUDGE_DEFAULT = "allenai/truthfulqa-truth-judge-llama2-7B"
@@ -174,6 +175,7 @@ def main():
     parser.add_argument('--max_samples', type=int, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--steering-geometry', choices=['auto', 'sphere', 'ellipsoid'], default='auto')
+    parser.add_argument('--eval-split', choices=['validation', 'test'], default='test')
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -193,12 +195,15 @@ def main():
     # Load prototypes
     print(f"Loading prototypes: {args.prototype_path}")
     artifact = load_steering_artifact(args.prototype_path, device)
-    if 'test_q_indices' not in artifact:
-        raise ValueError("TruthfulQA artifacts must contain test_q_indices")
-    test_q_indices = set(artifact['test_q_indices'])
+    split_key = f'{args.eval_split}_q_indices'
+    if split_key not in artifact:
+        raise ValueError(f"artifact does not contain {split_key}; regenerate prototypes")
+    selected_q_indices = set(artifact[split_key])
+    if not selected_q_indices:
+        raise ValueError(f"artifact contains an empty {args.eval_split} split")
     fold_match = re.search(r'fold(\d+)', args.prototype_path)
     fold_idx = int(fold_match.group(1)) if fold_match else 0
-    print(f"Fold: {fold_idx} | Test questions: {len(test_q_indices)}")
+    print(f"Fold: {fold_idx} | {args.eval_split.title()} questions: {len(selected_q_indices)}")
 
     # Setup steering
     layer_name = f"model.layers.{args.layer}"
@@ -214,7 +219,7 @@ def main():
 
     # Load questions from HuggingFace dataset
     hf_dataset = load_dataset("truthfulqa/truthful_qa", "multiple_choice")['validation']
-    test_list = sorted(list(test_q_indices))
+    test_list = sorted(list(selected_q_indices))
     if args.max_samples:
         test_list = test_list[:args.max_samples]
 
@@ -254,6 +259,8 @@ def main():
     # Save per-question results
     sfx = 'baseline' if args.disable_steering else f'steered_a{args.alpha}_b{args.beta}'
     pfx = 'fewshot' if args.preset == 'qa' else 'zeroshot'
+    if args.eval_split != 'test':
+        pfx += f'_{args.eval_split}'
     out_file = os.path.join(args.output_dir,
                             f"{args.model_name}_l{args.layer}_fold{fold_idx}_{sfx}_{pfx}.csv")
     pd.DataFrame(results).to_csv(out_file, index=False)

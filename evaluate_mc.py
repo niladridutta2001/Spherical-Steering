@@ -38,6 +38,7 @@ HF_NAMES = {
     'llama3.1-8B': 'meta-llama/Llama-3.1-8B',
     'llama3.1-8B-Instruct': 'meta-llama/Llama-3.1-8B-Instruct',
     'Qwen2.5-7B-Instruct': 'Qwen/Qwen2.5-7B-Instruct',
+    'Qwen2.5-3B-Instruct': 'Qwen/Qwen2.5-3B-Instruct',
 }
 
 DEFAULT_CSV_PATH = './TruthfulQA/data/v1/TruthfulQA.csv'
@@ -159,6 +160,8 @@ def main():
     parser.add_argument('--steering-geometry', choices=['auto', 'sphere', 'ellipsoid'], default='auto')
     parser.add_argument('--max_samples', type=int, default=None,
                         help='Evaluate only the first N held-out questions')
+    parser.add_argument('--eval-split', choices=['validation', 'test'], default='test',
+                        help='Artifact question split to evaluate')
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -179,9 +182,12 @@ def main():
     # Load prototypes
     print(f"Loading prototypes: {args.prototype_path}")
     artifact = load_steering_artifact(args.prototype_path, device)
-    if 'test_q_indices' not in artifact:
-        raise ValueError("TruthfulQA artifacts must contain test_q_indices")
-    test_q_indices = set(artifact['test_q_indices'])
+    split_key = f'{args.eval_split}_q_indices'
+    if split_key not in artifact:
+        raise ValueError(f"artifact does not contain {split_key}; regenerate it with a validation split")
+    selected_q_indices = set(artifact[split_key])
+    if not selected_q_indices:
+        raise ValueError(f"artifact contains an empty {args.eval_split} split")
 
     # Setup steering
     layer_name = f"model.layers.{args.layer}"
@@ -228,13 +234,13 @@ def main():
 
     # Evaluate on test fold only (prevents data leakage)
     tag = args.model_name
-    results_df = df[df['hf_idx'].isin(test_q_indices)].copy().reset_index(drop=True)
+    results_df = df[df['hf_idx'].isin(selected_q_indices)].copy().reset_index(drop=True)
     if args.max_samples is not None:
         if args.max_samples < 1:
             raise ValueError('--max_samples must be at least 1')
         results_df = results_df.head(args.max_samples).copy()
     set_columns(tag, results_df)
-    print(f"Evaluating {len(results_df)} test questions (held-out fold)...\n")
+    print(f"Evaluating {len(results_df)} {args.eval_split} questions...\n")
 
     pbar = tqdm(range(len(results_df)), total=len(results_df))
     for i in pbar:
@@ -281,6 +287,8 @@ def main():
         os.makedirs('results', exist_ok=True)
         s = 'baseline' if args.no_intervention else f'a{args.alpha}_b{args.beta}'
         m = 'fewshot' if args.few_shot else 'zeroshot'
+        if args.eval_split != 'test':
+            m += f'_{args.eval_split}'
         args.output_path = f"results/{args.model_name.replace('/', '_')}_l{args.layer}_{s}_{m}.json"
 
     os.makedirs(os.path.dirname(args.output_path) or '.', exist_ok=True)
@@ -289,6 +297,7 @@ def main():
             'model_name': args.model_name, 'layer': args.layer,
             'kappa': args.kappa, 'alpha': args.alpha, 'beta': args.beta,
             'eval_mode': eval_mode, 'seed': args.seed,
+            'eval_split': args.eval_split,
             'no_intervention': args.no_intervention,
             'num_test_questions': len(results_df),
             'metrics': {'MC1': mc1, 'MC2': mc2, 'MC3': mc3},

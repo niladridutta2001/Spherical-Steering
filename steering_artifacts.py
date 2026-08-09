@@ -29,8 +29,9 @@ def load_steering_artifact(path, device="cpu"):
         for key in ("artifact_version", "covariance_source", "shrinkage",
                     "variance_floor", "cov_rank", "fold_idx"):
             artifact[key] = _scalar(data, key)
-        if "test_q_indices" in data:
-            artifact["test_q_indices"] = np.array(data["test_q_indices"])
+        for key in ("train_q_indices", "validation_q_indices", "test_q_indices"):
+            if key in data:
+                artifact[key] = np.array(data[key])
         if geometry != "sphere":
             artifact["center"] = torch.as_tensor(data["center"], dtype=torch.float32, device=device)
             if geometry == "ellipsoid-diag":

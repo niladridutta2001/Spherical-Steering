@@ -140,6 +140,24 @@ bash quickstart_llama.sh
 bash quickstart_qwen.sh
 ```
 
+For a paper-style methodology adapted to Qwen2.5-3B-Instruct, reserve validation
+questions inside each randomized development fold:
+
+```bash
+python get_activations.py Qwen2.5-3B-Instruct --layer 19 --save_dir ./features
+python get_prototypes.py \
+  --feature_file ./features/Qwen2.5-3B-Instruct_layer19.npz \
+  --save_dir ./prototypes_qwen3b_paper \
+  --geometry sphere --num_folds 2 \
+  --shuffle-folds --seed 42 --validation-fraction 0.2
+```
+
+Use `--eval-split validation` to select the layer and steering parameters, then
+run the chosen configuration once with `--eval-split test`. Fit separate
+artifacts for every candidate layer. Never select parameters from test metrics.
+The 3B model is an adapted replication; the paper's reported numbers use
+Qwen2.5-7B-Instruct and LLaMA-3.1-8B-Instruct.
+
 Current quickstart defaults:
 
 | Script | Model | Layer | `kappa` | `alpha` | `beta` |
