@@ -157,6 +157,8 @@ def main():
     parser.add_argument('--save_details', action='store_true')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--steering-geometry', choices=['auto', 'sphere', 'ellipsoid'], default='auto')
+    parser.add_argument('--max_samples', type=int, default=None,
+                        help='Evaluate only the first N held-out questions')
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -227,6 +229,10 @@ def main():
     # Evaluate on test fold only (prevents data leakage)
     tag = args.model_name
     results_df = df[df['hf_idx'].isin(test_q_indices)].copy().reset_index(drop=True)
+    if args.max_samples is not None:
+        if args.max_samples < 1:
+            raise ValueError('--max_samples must be at least 1')
+        results_df = results_df.head(args.max_samples).copy()
     set_columns(tag, results_df)
     print(f"Evaluating {len(results_df)} test questions (held-out fold)...\n")
 
