@@ -27,8 +27,12 @@ def load_steering_artifact(path, device="cpu"):
         if not torch.isfinite(artifact["mu_T"]).all() or not torch.isfinite(artifact["mu_H"]).all():
             raise ValueError("artifact prototypes must be finite")
         for key in ("artifact_version", "covariance_source", "shrinkage",
-                    "variance_floor", "cov_rank", "fold_idx"):
+                    "variance_floor", "cov_rank", "fold_idx", "center_mode",
+                    "whitening_power", "variance_scale", "activation_positions",
+                    "prompt_format"):
             artifact[key] = _scalar(data, key)
+        artifact["center_mode"] = artifact.get("center_mode") or "global"
+        artifact["whitening_power"] = 0.5 if artifact.get("whitening_power") is None else float(artifact["whitening_power"])
         for key in ("train_q_indices", "validation_q_indices", "test_q_indices"):
             if key in data:
                 artifact[key] = np.array(data[key])
@@ -41,6 +45,10 @@ def load_steering_artifact(path, device="cpu"):
                     "basis": torch.as_tensor(data["basis"], dtype=torch.float32, device=device),
                     "eigvals": torch.as_tensor(data["eigvals"], dtype=torch.float32, device=device),
                     "residual_var": torch.as_tensor(data["residual_var"], dtype=torch.float32, device=device)}
+            artifact["geometry_data"]["whitening_power"] = artifact["whitening_power"]
+            if artifact.get("variance_scale") is not None:
+                artifact["geometry_data"]["variance_scale"] = torch.as_tensor(
+                    artifact["variance_scale"], dtype=torch.float32, device=device)
             if artifact["center"].shape != artifact["mu_T"].shape:
                 raise ValueError("artifact center and prototypes have inconsistent dimensions")
             geom = artifact["geometry_data"]
@@ -85,13 +93,15 @@ def evaluation_diagnostics(artifact, stats):
     return {
         "steering_geometry": artifact["geometry"],
         "covariance_source": artifact.get("covariance_source"),
+        "center_mode": artifact.get("center_mode", "global"),
+        "whitening_power": artifact.get("whitening_power", 0.5),
         "cov_rank": artifact.get("cov_rank"),
         "shrinkage": artifact.get("shrinkage"),
         "variance_floor": artifact.get("variance_floor"),
         "trigger_rate": stats.get("steered", 0) / total if total else 0.0,
-        "mean_mahalanobis_radius_before": stats.get("radius_before_sum", 0.0) / total if ellipsoid and total else None,
-        "mean_mahalanobis_radius_after": stats.get("radius_after_sum", 0.0) / total if ellipsoid and total else None,
-        "max_relative_radius_error": stats.get("max_relative_radius_error") if ellipsoid and total else None,
+        "mean_metric_radius_before": stats.get("metric_radius_before_sum", 0.0) / total if ellipsoid and total else None,
+        "mean_metric_radius_after": stats.get("metric_radius_after_sum", 0.0) / total if ellipsoid and total else None,
+        "max_relative_metric_radius_error": stats.get("max_relative_metric_radius_error") if ellipsoid and total else None,
         "mean_angle_to_truth_before": stats.get("angle_before_sum", 0.0) / total if ellipsoid and total else None,
         "mean_angle_to_truth_after": stats.get("angle_after_sum", 0.0) / total if ellipsoid and total else None,
     }

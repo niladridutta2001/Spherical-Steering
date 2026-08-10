@@ -86,7 +86,7 @@ def ellipsoidal_geometric_logic(h, mu_T, mu_H, center, geometry,
 
 def ellipsoidal_baukit_hook_fn(output, layer_name, mu_T, mu_H, center,
                                 geometry, kappa, alpha, beta, stats=None,
-                                start_idx=None):
+                                start_idx=None, end_idx_exclusive=None):
     hidden = output[0] if isinstance(output, tuple) else output
     device = hidden.device
     mu_T, mu_H, center = (x.to(device=device, dtype=torch.float32)
@@ -95,18 +95,19 @@ def ellipsoidal_baukit_hook_fn(output, layer_name, mu_T, mu_H, center,
             for k, v in geometry.items()}
     _validate(mu_T, mu_H, center, geom, kappa, alpha, beta)
     start = hidden.shape[1] - 1 if start_idx is None else max(0, min(start_idx, hidden.shape[1] - 1))
-    selected = hidden[:, start:, :]
+    end = hidden.shape[1] if end_idx_exclusive is None else max(start, min(end_idx_exclusive, hidden.shape[1]))
+    selected = hidden[:, start:end, :]
     flat = selected.reshape(-1, selected.shape[-1])
     changed, trigger, before_r, after_r, before_a, after_a = _steer_batch(
         flat, mu_T, mu_H, center, geom, kappa, alpha, beta)
-    hidden[:, start:, :] = changed.reshape_as(selected)
+    hidden[:, start:end, :] = changed.reshape_as(selected)
     if stats is not None:
         stats["total"] = stats.get("total", 0) + trigger.numel()
         stats["steered"] = stats.get("steered", 0) + int(trigger.sum().item())
-        stats["radius_before_sum"] = stats.get("radius_before_sum", 0.0) + float(before_r.sum())
-        stats["radius_after_sum"] = stats.get("radius_after_sum", 0.0) + float(after_r.sum())
+        stats["metric_radius_before_sum"] = stats.get("metric_radius_before_sum", 0.0) + float(before_r.sum())
+        stats["metric_radius_after_sum"] = stats.get("metric_radius_after_sum", 0.0) + float(after_r.sum())
         rel = (after_r - before_r).abs() / before_r.clamp_min(1e-12)
-        stats["max_relative_radius_error"] = max(stats.get("max_relative_radius_error", 0.0), float(rel.max()))
+        stats["max_relative_metric_radius_error"] = max(stats.get("max_relative_metric_radius_error", 0.0), float(rel.max()))
         stats["angle_before_sum"] = stats.get("angle_before_sum", 0.0) + float(before_a.sum())
         stats["angle_after_sum"] = stats.get("angle_after_sum", 0.0) + float(after_a.sum())
     return (hidden,) + output[1:] if isinstance(output, tuple) else hidden

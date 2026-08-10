@@ -20,7 +20,8 @@ import numpy as np
 import os
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from utils import get_truthfulqa_data, extract_layer_activations
+from utils import (get_truthfulqa_data, extract_layer_activations,
+                   get_truthfulqa_candidates, extract_scored_activations)
 
 
 HF_NAMES = {
@@ -58,6 +59,10 @@ def main():
         default=None,
         help="Local directory with model data (overrides model_name)"
     )
+    parser.add_argument('--activation-positions', choices=['last', 'scored'], default='last')
+    parser.add_argument('--prompt-format', choices=['legacy', 'match-evaluation'], default='legacy')
+    parser.add_argument('--feature-dtype', choices=['float16', 'float32'], default='float32')
+    parser.add_argument('--no_instruction', action='store_true')
     
     args = parser.parse_args()
 
@@ -81,31 +86,45 @@ def main():
         trust_remote_code=True
     )
 
-    # 2. Load TruthfulQA Data
-    prompts, labels, q_indices = get_truthfulqa_data(tokenizer, style="standard")
-    
-    print("\n=== Data Statistics ===")
-    print(f"Total samples: {len(prompts)}")
-    print(f"Truthful samples: {sum(labels)}")
-    print(f"Hallucination samples: {len(labels) - sum(labels)}")
-    print(f"Example prompt: {prompts[0][:100]}...")
-    
     # 3. Extract Features
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    activations = extract_layer_activations(model, tokenizer, prompts, args.layer, device)
+    if args.activation_positions == 'scored':
+        if args.prompt_format != 'match-evaluation':
+            raise ValueError("scored positions require --prompt-format match-evaluation")
+        questions, choices, labels, q_indices, answer_indices = get_truthfulqa_candidates()
+        features = extract_scored_activations(
+            model, tokenizer, questions, choices, labels, q_indices,
+            answer_indices, args.layer, device, args.model_name,
+            not args.no_instruction, args.feature_dtype)
+        activations = features['activations']
+        features = {k: v for k, v in features.items() if k != 'activations'}
+    else:
+        prompts, labels, q_indices = get_truthfulqa_data(tokenizer, style="standard")
+        print("\n=== Data Statistics ===")
+        print(f"Total samples: {len(prompts)}")
+        print(f"Truthful samples: {sum(labels)}")
+        print(f"Hallucination samples: {len(labels) - sum(labels)}")
+        print(f"Example prompt: {prompts[0][:100]}...")
+        features = dict(labels=labels, q_indices=q_indices)
+        activations = extract_layer_activations(model, tokenizer, prompts, args.layer, device)
+        if args.feature_dtype == 'float16':
+            activations = activations.astype(np.float16)
     
     # 4. Save Features
     os.makedirs(args.save_dir, exist_ok=True)
     
-    save_name = f"{args.model_name}_layer{args.layer}.npz"
+    suffix = '_scored' if args.activation_positions == 'scored' else ''
+    save_name = f"{args.model_name}_layer{args.layer}{suffix}.npz"
     save_path = os.path.join(args.save_dir, save_name)
     
     print(f"\nSaving features to {save_path}...")
     np.savez(
         save_path, 
         activations=activations,
-        labels=labels,
-        q_indices=q_indices
+        **features,
+        activation_positions=np.array(args.activation_positions),
+        prompt_format=np.array(args.prompt_format),
+        feature_dtype=np.array(args.feature_dtype),
     )
     
     print(f"Feature shape: {activations.shape}")

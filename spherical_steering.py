@@ -85,7 +85,8 @@ def spherical_geometric_logic(x, mu_T, mu_H, kappa, alpha, beta):
     return x_new.to(orig_dtype), True
 
 
-def baukit_hook_fn(output, layer_name, mu_T, mu_H, kappa, alpha, beta, stats=None, start_idx=None):
+def baukit_hook_fn(output, layer_name, mu_T, mu_H, kappa, alpha, beta, stats=None,
+                   start_idx=None, end_idx_exclusive=None):
     """
     Hook function for use with baukit TraceDict.
     
@@ -132,7 +133,8 @@ def baukit_hook_fn(output, layer_name, mu_T, mu_H, kappa, alpha, beta, stats=Non
     else:
         # Range-based intervention (for MC scoring)
         safe_start = max(0, min(start_idx, seq_len - 1))
-        range_to_steer = range(safe_start, seq_len)
+        safe_end = seq_len if end_idx_exclusive is None else max(safe_start, min(end_idx_exclusive, seq_len))
+        range_to_steer = range(safe_start, safe_end)
 
     # Apply steering to each position in range
     for i in range(batch_size):

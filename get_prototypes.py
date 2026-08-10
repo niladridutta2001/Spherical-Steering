@@ -37,7 +37,7 @@ def normalize(v):
     return v / norm
 
 
-def compute_contrastive_prototypes(X_train, y_train):
+def compute_contrastive_prototypes(X_train, y_train, sample_weights=None):
     """
     Compute contrastive prototypes using the difference vector method.
     
@@ -56,9 +56,9 @@ def compute_contrastive_prototypes(X_train, y_train):
     X_true = X_train[y_train == 1]
     X_false = X_train[y_train == 0]
     
-    # Compute centroids
-    mean_true = np.mean(X_true, axis=0)
-    mean_false = np.mean(X_false, axis=0)
+    weights = np.ones(len(X_train)) if sample_weights is None else np.asarray(sample_weights)
+    mean_true = np.average(X_true, axis=0, weights=weights[y_train == 1])
+    mean_false = np.average(X_false, axis=0, weights=weights[y_train == 0])
     
     # Compute difference vector (truthful direction)
     diff_vec = mean_true - mean_false
@@ -71,6 +71,16 @@ def compute_contrastive_prototypes(X_train, y_train):
     cos_sim = np.dot(mu_T, mu_H)
     
     return mu_T, mu_H, cos_sim
+
+
+def load_sample_weights(data, n_samples):
+    """Load token weights, preserving uniform weighting for legacy features."""
+    if 'sample_weights' not in data:
+        return np.ones(n_samples, dtype=np.float64)
+    weights = np.asarray(data['sample_weights'], dtype=np.float64)
+    if weights.shape != (n_samples,) or not np.all(np.isfinite(weights)) or np.any(weights < 0):
+        raise ValueError("sample_weights must be a finite non-negative vector matching activations")
+    return weights
 
 
 def split_question_folds(q_indices, num_folds=2, validation_fraction=0.0,
@@ -127,6 +137,8 @@ def main():
     parser.add_argument('--shuffle-folds', action='store_true',
                         help='Randomize outer question folds reproducibly')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--center-mode', choices=['zero', 'global', 'class-midpoint'], default='global')
+    parser.add_argument('--whitening-power', type=float, default=0.5)
     
     args = parser.parse_args()
     try:
@@ -140,6 +152,9 @@ def main():
     X = data['activations']
     y = data['labels']
     q_indices = data['q_indices']
+    sample_weights = load_sample_weights(data, len(X))
+    if not 0.0 <= args.whitening_power <= 0.5:
+        raise ValueError("--whitening-power must lie in [0, 0.5]")
     
     print(f"Loaded {len(X)} samples with {X.shape[1]} dimensions")
     
@@ -164,20 +179,24 @@ def main():
         train_mask = np.isin(q_indices, train_qs)
         X_train = X[train_mask]
         y_train = y[train_mask]
+        weights_train = sample_weights[train_mask]
         print(f"Train: {len(X_train)} samples from {len(train_qs)} questions")
         print(f"Validation: {len(validation_qs)} questions")
         print(f"Test: {len(test_qs)} questions")
         
         # Fit exclusively on this fold's training activations.
         if args.geometry == 'sphere':
-            mu_T, mu_H, _ = compute_contrastive_prototypes(X_train, y_train)
-            artifact = dict(mu_T=mu_T, mu_H=mu_H, center=np.mean(X_train, axis=0))
+            mu_T, mu_H, _ = compute_contrastive_prototypes(X_train, y_train, weights_train)
+            artifact = dict(mu_T=mu_T, mu_H=mu_H,
+                            center=np.average(X_train, axis=0, weights=weights_train))
         else:
             fitted = fit_ellipsoid_geometry(
                 X_train, y_train, geometry=args.geometry,
                 covariance_source=args.covariance_source,
                 shrinkage=args.shrinkage, variance_floor=args.variance_floor,
-                cov_rank=args.cov_rank, radius_quantiles=radius_quantiles)
+                cov_rank=args.cov_rank, radius_quantiles=radius_quantiles,
+                sample_weights=weights_train, center_mode=args.center_mode,
+                whitening_power=args.whitening_power)
             artifact = {k: v for k, v in fitted.items() if k not in ('m_T', 'm_H')}
         
         # Save prototypes
@@ -194,6 +213,11 @@ def main():
             split_seed=np.array(args.seed, dtype=np.int64),
             validation_fraction=np.array(args.validation_fraction, dtype=np.float32),
             shuffled_folds=np.array(args.shuffle_folds))
+        artifact.update(
+            center_mode=np.array(args.center_mode),
+            whitening_power=np.array(args.whitening_power, dtype=np.float32),
+            activation_positions=np.array(str(data['activation_positions'].item()) if 'activation_positions' in data else 'last'),
+            prompt_format=np.array(str(data['prompt_format'].item()) if 'prompt_format' in data else 'legacy'))
         artifact = {k: (v.astype(np.float32) if isinstance(v, np.ndarray) and
                          np.issubdtype(v.dtype, np.floating) else v)
                     for k, v in artifact.items()}

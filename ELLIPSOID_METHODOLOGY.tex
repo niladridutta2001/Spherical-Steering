@@ -1,0 +1,537 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{microtype}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\mT}{\bm{\mu}_{T}}
+\newcommand{\mH}{\bm{\mu}_{H}}
+\newcommand{\mTz}{\bm{\mu}^{(z)}_{T}}
+\newcommand{\mHz}{\bm{\mu}^{(z)}_{H}}
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert_2}
+\newcommand{\trans}{^{\mathsf T}}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  backgroundcolor=\color{gray!5}
+}
+
+\title{Mahalanobis Ellipsoidal Steering\\
+\large Methodology and Qwen2.5-3B TruthfulQA Protocol}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We describe a Mahalanobis ellipsoidal extension of Spherical Steering for
+inference-time control of language-model hidden states.  The method estimates
+the center and covariance geometry of calibration activations, whitens a
+hidden state, performs a norm-preserving spherical rotation in whitened
+coordinates, and maps the result back to the original representation space.
+The construction preserves the activation's Mahalanobis radius.  We present
+diagonal and low-rank-plus-isotropic covariance representations, a stable
+matrix-free intervention, leakage-safe nested evaluation on TruthfulQA, and
+the validation procedure used for Qwen2.5-3B-Instruct.  This ellipsoidal method
+is an extension of, rather than a method evaluated in, the original Spherical
+Steering paper.
+\end{abstract}
+
+\section{Motivation and Scope}
+
+Ordinary activation addition changes both the direction and magnitude of a
+hidden representation.  Spherical Steering instead rotates a hidden state on
+a Euclidean sphere and preserves its Euclidean norm.  The spherical model,
+however, treats the origin as the center of the representation geometry and
+all directions as having equal scale.  Transformer activations can be
+nonzero-centered, anisotropic, and strongly correlated.  We therefore replace
+the Euclidean geometry by a constant Mahalanobis metric estimated from
+calibration activations.
+
+Let $\bm h\in\R^d$ be a hidden state, $\bm c\in\R^d$ a calibration center, and
+$\bm\Sigma\succ0$ a regularized covariance estimator.  Define
+\begin{equation}
+  \bm z = \bm W_p(\bm h-\bm c),
+  \qquad \bm W_p=\tau^p\bm\Sigma^{-p},\quad
+  \tau=\operatorname{tr}(\bm\Sigma)/d,\quad 0\leq p\leq\tfrac12.
+\end{equation}
+We rotate $\bm z$ toward a truthful prototype in transformed coordinates and map
+the result back using $\bm W_p^{-1}$. At $p=0$ this is the identity geometry;
+at $p=1/2$ it is normalized full whitening. The trace normalization makes the
+map invariant to global covariance scale. The trajectory is a spherical geodesic in
+transformed coordinates, equivalently a geodesic under a powered Mahalanobis
+metric.  We do \emph{not} claim that it is an ambient-Euclidean geodesic of an
+embedded ellipsoid.
+
+\section{Calibration Data and Leakage Control}
+
+For every TruthfulQA question--answer candidate, we concatenate the exact
+evaluation prompt and candidate token sequences and extract every hidden
+position whose next-token logits score the answer. For prompt length $P$ and
+answer length $L$, these are $P-1,\ldots,P+L-2$. Each receives weight $1/L$,
+so every answer candidate contributes unit total fitting weight. Each
+activation is paired with a binary label $y_i\in\{0,1\}$, where
+$1$ denotes a truthful answer and $0$ an incorrect or hallucinated answer.
+Activations belonging to the same question are always assigned to the same
+split.
+
+For each outer fold, let $\mathcal D_{\mathrm{fit}}$ be the prototype-fitting
+set, $\mathcal D_{\mathrm{val}}$ the hyperparameter-validation set, and
+$\mathcal D_{\mathrm{test}}$ the untouched test set.  All quantities below---the
+center, class means, covariance axes, shrinkage target, retained rank,
+prototypes, and radius quantiles---are estimated exclusively from
+$\mathcal D_{\mathrm{fit}}$.  Validation and test activations never participate
+in geometry fitting.
+
+Our adapted Qwen2.5-3B protocol uses two randomized outer folds with seed 42.
+Within each outer development fold, 20\% of questions are reserved for
+validation and the remaining 80\% are used to fit prototypes.  Hyperparameters
+are selected on validation data and frozen before the outer test fold is
+evaluated.  The process is repeated independently for the second outer fold.
+
+\section{Ellipsoid Estimation}
+
+Given fitting activations $\bm x_i$ and reliability weights $w_i$, define the
+weighted class means $\bm m_T,\bm m_H$. We independently sweep three steering
+origins,
+\begin{equation}
+ \bm c_{\rm zero}=\bm0,\qquad
+ \bm c_{\rm global}=\frac{\sum_iw_i\bm x_i}{\sum_iw_i},\qquad
+ \bm c_{\rm midpoint}=\tfrac12(\bm m_T+\bm m_H).
+\end{equation}
+Weighted covariance uses denominator
+$D_w=\sum_iw_i-(\sum_iw_i^2)/(\sum_iw_i)$. For reference, with uniform
+weights the means reduce to
+\begin{align}
+  \bm m_T &= \frac{1}{n_T}\sum_{i:y_i=1}\bm x_i, &
+  \bm m_H &= \frac{1}{n_H}\sum_{i:y_i=0}\bm x_i,\\
+  \bm c &= \frac{1}{n}\sum_{i=1}^{n}\bm x_i.
+\end{align}
+
+\subsection{Covariance residuals}
+
+We support two covariance sources.  Global covariance uses
+\begin{equation}
+  \bm r_i=\bm x_i-\bm c.
+\end{equation}
+Pooled within-class covariance uses
+\begin{equation}
+  \bm r_i =
+  \begin{cases}
+    \bm x_i-\bm m_T,&y_i=1,\\
+    \bm x_i-\bm m_H,&y_i=0.
+  \end{cases}
+\end{equation}
+We recommend pooled residuals because the truthful--hallucinated mean
+difference does not itself inflate a covariance axis.
+
+\subsection{Shrinkage and flooring}
+
+Let $v_j$ denote an estimated diagonal variance or covariance eigenvalue and
+let
+\begin{equation}
+  \tau=\frac{1}{d}\sum_{j=1}^{d}v_j.
+\end{equation}
+With shrinkage coefficient $\gamma\in[0,1]$, we use
+\begin{equation}
+  v_j^{(\gamma)}=(1-\gamma)v_j+\gamma\tau,
+\end{equation}
+followed by the relative and absolute floor
+\begin{equation}
+  v_j\leftarrow\max\{v_j,\epsilon\tau,\epsilon\},
+  \qquad \epsilon>0.
+\end{equation}
+Covariance fitting is performed in float64 where feasible, and saved artifacts
+use float32.
+
+\subsection{Diagonal representation}
+
+The diagonal estimator stores only
+\begin{equation}
+  \bm c\in\R^d,
+  \qquad \bm v=\operatorname{diag}(\bm\Sigma)\in\R^d.
+\end{equation}
+Whitening and coloring are elementwise:
+\begin{equation}
+  \bm W\bm u=\bm u\oslash\sqrt{\bm v},
+  \qquad
+  \bm W^{-1}\bm u=\bm u\odot\sqrt{\bm v}.
+\end{equation}
+This is the lowest-memory estimator, but it ignores correlations between hidden
+dimensions.
+
+\subsection{Low-rank plus isotropic residual representation}
+
+The low-rank estimator uses randomized truncated SVD of the fitting residual
+matrix and never constructs a dense $d\times d$ covariance or whitening
+matrix.  It represents
+\begin{equation}
+ \bm\Sigma=m U\operatorname{diag}(\lambda_1,\ldots,\lambda_k)\bm U\trans
+ +\sigma_\perp^2(\bm I-\bm U\bm U\trans),
+\end{equation}
+where $\bm U\in\R^{d\times k}$ has orthonormal columns.  Before shrinkage, the
+residual variance is estimated by
+\begin{equation}
+  \sigma_\perp^2=
+  \frac{\operatorname{tr}(\widehat{\bm\Sigma})-
+  \sum_{j=1}^{k}\lambda_j}{d-k}.
+\end{equation}
+The matrix-free whitening operation is
+\begin{equation}
+\bm W\bm u = \frac{\bm u}{\sqrt{\sigma_\perp^2}}+
+\bm U\left[
+\left(\bm\lambda^{-1/2}-(\sigma_\perp^2)^{-1/2}\bm 1\right)
+\odot(\bm U\trans\bm u)
+\right],
+\end{equation}
+and inverse whitening is
+\begin{equation}
+\bm W^{-1}\bm u = \sqrt{\sigma_\perp^2}\bm u+
+\bm U\left[
+\left(\sqrt{\bm\lambda}-\sqrt{\sigma_\perp^2}\bm 1\right)
+\odot(\bm U\trans\bm u)
+\right].
+\end{equation}
+
+\section{Whitened Contrastive Prototypes}
+
+The raw contrastive mean direction is
+\begin{equation}
+  \bm d=\bm m_T-\bm m_H.
+\end{equation}
+For ellipsoidal steering, it is essential to whiten this direction before
+normalization:
+\begin{equation}
+  \bm d_z=\bm W\bm d,
+  \qquad
+  \mTz=\frac{\bm d_z}{\norm{\bm d_z}},
+  \qquad
+  \mHz=-\mTz.
+\end{equation}
+Fitting fails explicitly if $\norm{\bm d_z}$ is numerically negligible.  Raw
+space spherical prototypes are not reused for ellipsoidal steering.
+
+\section{Adaptive Mahalanobis Steering}
+
+For a hidden state $\bm h$, compute
+\begin{equation}
+  \bm z=\bm W(\bm h-\bm c),
+  \qquad r_M=\norm{\bm z},
+  \qquad \widehat{\bm z}=\bm z/r_M.
+\end{equation}
+Near-zero $r_M$ produces an exact no-op.  Otherwise, calculate directional
+similarities
+\begin{equation}
+  s_T=\widehat{\bm z}\trans\mTz,
+  \qquad s_H=\widehat{\bm z}\trans\mHz,
+\end{equation}
+and vMF-style probabilities
+\begin{equation}
+  (p_T,p_H)=\operatorname{softmax}(\kappa s_T,\kappa s_H).
+\end{equation}
+Let $\delta=p_H-p_T$.  Steering triggers only when $\delta>\beta$, with
+adaptive strength
+\begin{equation}
+  t=\operatorname{clip}\left(
+  \alpha\frac{\delta-\beta}{1-\beta},0,1\right).
+\end{equation}
+Here $\kappa$ controls confidence sharpness, $\beta$ controls selectivity, and
+$\alpha$ controls the maximum rotation strength.
+
+\subsection{Stable exponential-map Slerp}
+
+Let
+\begin{equation}
+ q=\operatorname{clip}(\widehat{\bm z}\trans\mTz,-1,1),
+ \qquad \theta=\arccos q,
+\end{equation}
+and define the normalized tangent
+\begin{equation}
+  \bm v=\frac{\mTz-q\widehat{\bm z}}
+  {\norm{\mTz-q\widehat{\bm z}}}.
+\end{equation}
+The rotated unit direction is
+\begin{equation}
+  \widehat{\bm z}'=cos(t\theta)\widehat{\bm z}
+  +\sin(t\theta)\bm v.
+\end{equation}
+For nearly antipodal vectors or a tiny tangent norm, a deterministic orthogonal
+tangent is constructed from the coordinate basis vector least aligned with
+$\widehat{\bm z}$.  Already-aligned vectors, invalid parameters, and nonfinite
+inputs are handled explicitly.
+
+Finally,
+\begin{equation}
+  \bm z'=r_M\widehat{\bm z}',
+  \qquad
+  \bm h'=\bm c+\bm W^{-1}\bm z'.
+\end{equation}
+Intervention arithmetic uses float32 and the output is returned in the input
+activation dtype.
+
+\section{Mahalanobis-Radius Invariance}
+
+Because Slerp preserves unit norm and we restore the original $r_M$,
+\begin{align}
+  \norm{\bm W(\bm h'-\bm c)}^2
+  &=\norm{\bm z'}^2\\
+  &=r_M^2\\
+  &=\norm{\bm W(\bm h-\bm c)}^2.
+\end{align}
+Equivalently,
+\begin{equation}
+ (\bm h'-\bm c)\trans\bm\Sigma^{-1}(\bm h'-\bm c)
+ =
+ (\bm h-\bm c)\trans\bm\Sigma^{-1}(\bm h-\bm c),
+\end{equation}
+up to floating-point tolerance.  Observed maximum relative radius errors in
+our experiments were approximately $10^{-7}$.
+
+\section{TruthfulQA Evaluation Protocol}
+
+We use Qwen2.5-3B-Instruct and matched scored-token activations. This retains the paper's
+evaluation structure while changing the model size; consequently, it is an
+adapted replication and cannot be expected to reproduce the paper's published
+7B/8B numbers.
+
+For multiple-choice evaluation, every truthful and incorrect reference answer
+is scored by its conditional token log-likelihood.  MC1 indicates whether the
+designated best truthful answer outranks all incorrect answers.  MC2 is the
+normalized probability mass assigned to truthful answers.  MC3 is the fraction
+of truthful references that outrank the highest-scoring incorrect reference.
+We also report
+\begin{equation}
+  \mathrm{MC\ Avg.}=\frac{\mathrm{MC1}+\mathrm{MC2}+\mathrm{MC3}}{3}.
+\end{equation}
+
+The tuning order is:
+\begin{enumerate}
+  \item choose candidate layers using permissive gating on validation data;
+  \item fit a separate artifact for every layer and covariance configuration;
+  \item tune $\beta$ on validation data to calibrate intervention selectivity;
+  \item tune $\alpha$ at the selected $\beta$;
+  \item optionally tune shrinkage and covariance rank, still using validation;
+  \item freeze all choices and evaluate the corresponding outer test fold once.
+\end{enumerate}
+The second outer fold repeats the complete selection process independently.
+No parameter is changed after observing test results.
+
+\section{Preliminary Fold-0 Results}
+
+Table~\ref{tab:validation} reports the validation results at layer 19.  These
+results motivated a more permissive ellipsoidal gate because whitening changes
+the distribution of cosine alignments; spherical and ellipsoidal $\beta$ values
+are therefore not directly transferable.
+
+\begin{table}[ht]
+\centering
+\caption{Fold-0 validation results for Qwen2.5-3B-Instruct.}
+\label{tab:validation}
+\begin{tabular}{lrrrrr}
+\toprule
+Method & Trigger & MC1 & MC2 & MC3 & MC Avg.\\
+\midrule
+Baseline & 0.0\% & 0.2683 & 0.3725 & 0.1939 & 0.2782\\
+Sphere ($\alpha=.6,\beta=.4$) & 95.4\% & 0.4377 & 0.6350 & 0.3958 & 0.4895\\
+Diagonal ($\alpha=.6,\beta=-.8$) & 47.5\% & 0.3415 & 0.4183 & 0.2167 & 0.3255\\
+Low-rank ($\alpha=.8,\beta=-.8$) & 92.3\% & 0.4634 & 0.6102 & 0.3413 & 0.4716\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The selected low-rank fold-0 configuration used rank 128, pooled covariance,
+shrinkage $0.1$, variance floor $10^{-5}$, $\kappa=20$, $\alpha=0.8$, and
+$\beta=-0.8$.  On the untouched fold-0 test split it obtained MC1 $0.3692$,
+MC2 $0.6079$, and MC3 $0.3305$, for MC Avg. $0.4359$, with a 91.7\% trigger
+rate.  The stable validation-to-test trigger rate suggests that gate frequency
+generalized, while the largest metric change occurred in MC1.  Fold-1 tuning
+and evaluation are required before reporting a two-fold result.
+
+\subsection{Diagonal selectivity sweep}
+
+Table~\ref{tab:diag-beta} shows that the spherical gate threshold did not
+transfer to diagonal whitened coordinates.  Lowering $\beta$ increased the
+intervention rate and consistently improved the diagonal estimator over the
+matching validation baseline.  Among the tested values, $\beta=-0.8$ was best
+on all three MC metrics.
+
+\begin{table}[ht]
+\centering
+\caption{Diagonal ellipsoid fold-0 validation sweep with $\kappa=20$ and
+$\alpha=0.6$.}
+\label{tab:diag-beta}
+\begin{tabular}{rrrrrr}
+\toprule
+$\beta$ & Trigger & MC1 & MC2 & MC3 & MC Avg.\\
+\midrule
+$-0.8$ & 47.5\% & 0.3415 & 0.4183 & 0.2167 & 0.3255\\
+$-0.5$ & 27.0\% & 0.3171 & 0.4036 & 0.2024 & 0.3077\\
+$-0.2$ & 19.2\% & 0.3171 & 0.3990 & 0.2045 & 0.3069\\
+$0.0$  & 16.0\% & 0.3171 & 0.3987 & 0.2085 & 0.3081\\
+$0.2$  & 13.5\% & 0.3171 & 0.3942 & 0.2085 & 0.3066\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Low-rank selectivity sweep}
+
+The low-rank gate responded much more strongly to negative thresholds.  As
+shown in Table~\ref{tab:lowrank-beta}, performance peaked at $\beta=-0.8$.
+Making the gate fully permissive at $\beta=-1$ caused MC2 to fall, indicating
+that selective intervention remained useful even though the best trigger rate
+was high.
+
+\begin{table}[ht]
+\centering
+\caption{Rank-128 ellipsoid fold-0 validation sweep with $\kappa=20$ and
+$\alpha=0.6$.}
+\label{tab:lowrank-beta}
+\begin{tabular}{rrrrrr}
+\toprule
+$\beta$ & Trigger & MC1 & MC2 & MC3 & MC Avg.\\
+\midrule
+$-1.0$ & 100.0\% & 0.4512 & 0.5746 & 0.3419 & 0.4559\\
+$-0.9$ & 97.7\%  & 0.4390 & 0.5748 & 0.3260 & 0.4466\\
+$-0.8$ & 92.3\%  & 0.4512 & 0.6112 & 0.3433 & \textbf{0.4686}\\
+$-0.7$ & 82.4\%  & 0.4390 & 0.6094 & 0.3423 & 0.4636\\
+$-0.5$ & 61.7\%  & 0.4024 & 0.5580 & 0.3065 & 0.4223\\
+$-0.2$ & 27.9\%  & 0.3902 & 0.4941 & 0.2931 & 0.3925\\
+$0.0$  & 13.7\%  & 0.3659 & 0.4658 & 0.2518 & 0.3612\\
+$0.4$  & 3.2\%   & 0.2805 & 0.3882 & 0.2000 & 0.2896\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Low-rank rotation-strength sweep}
+
+After fixing $\beta=-0.8$, we swept $\alpha$.  The trigger rate remained
+92.3\% for every positive $\alpha$, as expected: $\beta$ determines whether
+the gate opens, whereas $\alpha$ determines how far a triggered activation is
+rotated.  Table~\ref{tab:lowrank-alpha} shows a broad optimum around
+$\alpha\in[0.7,0.8]$.  Performance declined at $\alpha=0.9$ and sharply at
+$\alpha=1.0$, consistent with over-steering.
+
+\begin{table}[ht]
+\centering
+\caption{Rank-128 ellipsoid fold-0 validation sweep with $\kappa=20$ and
+$\beta=-0.8$.}
+\label{tab:lowrank-alpha}
+\begin{tabular}{rrrrr}
+\toprule
+$\alpha$ & MC1 & MC2 & MC3 & MC Avg.\\
+\midrule
+0.3 & 0.4390 & 0.5530 & 0.3278 & 0.4399\\
+0.4 & 0.4268 & 0.5830 & 0.3262 & 0.4453\\
+0.5 & 0.4268 & 0.6038 & 0.3327 & 0.4544\\
+0.6 & 0.4512 & 0.6112 & 0.3433 & 0.4686\\
+0.7 & 0.4634 & 0.6049 & 0.3443 & 0.4709\\
+0.8 & 0.4634 & 0.6102 & 0.3413 & \textbf{0.4716}\\
+0.9 & 0.4512 & 0.6117 & 0.3337 & 0.4655\\
+1.0 & 0.4024 & 0.6063 & 0.3150 & 0.4412\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Frozen fold-0 test result}
+
+After validation selection, the low-rank configuration was frozen at
+$\kappa=20$, $\alpha=0.8$, and $\beta=-0.8$.  Table~\ref{tab:lowrank-test}
+compares its validation and test behavior.  The trigger rate and MC2/MC3
+transferred closely; most of the validation-to-test decline arose in MC1.
+
+\begin{table}[ht]
+\centering
+\caption{Selected rank-128 ellipsoid before and after outer-fold evaluation.}
+\label{tab:lowrank-test}
+\begin{tabular}{lrrrrr}
+\toprule
+Split & Trigger & MC1 & MC2 & MC3 & MC Avg.\\
+\midrule
+Validation & 92.3\% & 0.4634 & 0.6102 & 0.3413 & 0.4716\\
+Test       & 91.7\% & 0.3692 & 0.6079 & 0.3305 & 0.4359\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Earlier 25-question smoke tests}
+
+Before introducing the nested paper-style split, we ran 25-question smoke
+tests using the legacy fold construction.  The unsteered baseline obtained
+MC1/MC2/MC3 of $0.3200/0.4571/0.2119$; spherical steering obtained
+$0.4000/0.6314/0.2620$; and the initial diagonal ellipsoid obtained
+$0.3200/0.4926/0.2219$.  These runs established end-to-end functionality but
+are not pooled with the nested-protocol results because their question split
+and tuning procedure differ.
+
+\section{Reproducibility Commands}
+
+\begin{lstlisting}[language=bash]
+# Extract Qwen2.5-3B layer-19 activations.
+python get_activations.py Qwen2.5-3B-Instruct \
+  --layer 19 --save_dir ./features
+
+# Fit low-rank ellipsoid artifacts with leakage-safe nested splits.
+python get_prototypes.py \
+  --feature_file ./features/Qwen2.5-3B-Instruct_layer19.npz \
+  --save_dir ./prototypes_qwen3b_ellipsoid_lowrank \
+  --geometry ellipsoid-lowrank \
+  --covariance-source pooled \
+  --shrinkage 0.1 --variance-floor 1e-5 --cov-rank 128 \
+  --num_folds 2 --shuffle-folds --seed 42 \
+  --validation-fraction 0.2
+
+# Validation evaluation.
+python evaluate_mc.py Qwen2.5-3B-Instruct \
+  --prototype_path \
+  ./prototypes_qwen3b_ellipsoid_lowrank/Qwen2.5-3B-Instruct_layer19_fold0.npz \
+  --eval-split validation --steering-geometry ellipsoid \
+  --layer 19 --kappa 20 --alpha 0.8 --beta -0.8
+
+# Frozen fold-0 test evaluation.
+python evaluate_mc.py Qwen2.5-3B-Instruct \
+  --prototype_path \
+  ./prototypes_qwen3b_ellipsoid_lowrank/Qwen2.5-3B-Instruct_layer19_fold0.npz \
+  --eval-split test --steering-geometry ellipsoid \
+  --layer 19 --kappa 20 --alpha 0.8 --beta -0.8 \
+  --output_path ./results/qwen3b_lowrank_fold0_test.json
+\end{lstlisting}
+
+\section{Interpretation and Limitations}
+
+The diagonal estimator is inexpensive but assumes coordinate-wise independence.
+At Qwen layer 19 it produced a substantially lower trigger rate and weaker
+validation metrics than the rank-128 estimator.  The low-rank representation
+captures correlated activation directions and approached spherical validation
+performance while obtaining a higher MC1.  This observation is specific to
+the current layer, rank, split, and model and is not evidence that low-rank
+geometry universally dominates diagonal geometry.
+
+Multiple-choice tuning alone can favor aggressive rotations that harm
+open-ended informativeness.  A complete study should additionally evaluate
+TruthfulQA TRUE, INFO, and TRUE$\times$INFO on validation data before freezing
+hyperparameters.  It should report both outer folds, uncertainty across seeds,
+the sensitivity to layer and covariance rank, and a baseline using identical
+prompts and splits.  Finally, the ellipsoid is a calibration-data geometry
+estimator, not a separately trained predictive model.
+
+\begin{thebibliography}{9}
+\bibitem{spherical}
+Z. You, C. Deng, and H. Chen.
+\newblock Spherical Steering: Geometry-Aware Activation Rotation for Language Models.
+\newblock arXiv:2602.08169, 2026.
+
+\bibitem{truthfulqa}
+S. Lin, J. Hilton, and O. Evans.
+\newblock TruthfulQA: Measuring How Models Mimic Human Falsehoods.
+\newblock ACL, 2022.
+\end{thebibliography}
+
+\end{document}

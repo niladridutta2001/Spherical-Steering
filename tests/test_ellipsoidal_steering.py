@@ -72,8 +72,9 @@ def test_lowrank_matches_explicit_covariance():
     U, lam, residual = geometry["basis"], geometry["eigvals"], geometry["residual_var"]
     covariance = U @ torch.diag(lam) @ U.T + residual * (torch.eye(6) - U @ U.T)
     eig, vec = torch.linalg.eigh(covariance)
-    W = vec @ torch.diag(eig.rsqrt()) @ vec.T
-    C = vec @ torch.diag(eig.sqrt()) @ vec.T
+    tau = torch.trace(covariance) / covariance.shape[0]
+    W = vec @ torch.diag((eig / tau).rsqrt()) @ vec.T
+    C = vec @ torch.diag((eig / tau).sqrt()) @ vec.T
     v = torch.randn(4, 6)
     torch.testing.assert_close(whiten_torch(v, geometry), v @ W, atol=2e-5, rtol=2e-5)
     torch.testing.assert_close(color_torch(v, geometry), v @ C, atol=2e-5, rtol=2e-5)

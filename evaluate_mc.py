@@ -31,6 +31,7 @@ from truthfulqa.presets import preset_map
 from baukit import TraceDict
 from steering_artifacts import (load_steering_artifact, build_intervention,
                                 evaluation_diagnostics)
+from truthfulqa_prompts import build_zero_shot_candidate
 
 # ==================== Constants ====================
 
@@ -73,19 +74,15 @@ def calculate_scores_zeroshot(model, tokenizer, question, choices,
                               base_hook_fn, layer_name, device,
                               use_instruction=True, model_name=None):
     """Zero-shot: [Instruction]\\n\\nQ: {question} A: {choice}. All choice tokens scored."""
-    base = f"Q: {question} A:"
-    if use_instruction:
-        base = get_instruction(model_name) + "\n\n" + base
-    prompt_ids = tokenizer(base, return_tensors='pt').input_ids.to(device)
-    start_idx = prompt_ids.shape[1] - 1
-
     scores = []
     for choice in choices:
-        choice_ids = tokenizer(f" {choice}", add_special_tokens=False,
-                               return_tensors='pt').input_ids.to(device)
-        input_ids = torch.cat([prompt_ids, choice_ids], dim=1)
+        built = build_zero_shot_candidate(tokenizer, question, choice, model_name,
+                                          use_instruction, device)
+        input_ids = built['input_ids']; start_idx = built['start_idx']
+        end_idx_exclusive = built['end_idx_exclusive']
 
-        hook = partial(base_hook_fn, start_idx=start_idx) if base_hook_fn else None
+        hook = partial(base_hook_fn, start_idx=start_idx,
+                       end_idx_exclusive=end_idx_exclusive) if base_hook_fn else None
         with torch.no_grad():
             with TraceDict(model, [layer_name], edit_output=hook) as ret:
                 outputs = model(input_ids)
@@ -95,7 +92,7 @@ def calculate_scores_zeroshot(model, tokenizer, question, choices,
         shift_labels = input_ids[..., 1:].contiguous()
         log_probs = torch.nn.functional.log_softmax(shift_logits, dim=-1)
         token_lp = torch.gather(log_probs, 2, shift_labels.unsqueeze(2)).squeeze(2)
-        scores.append(token_lp[0, start_idx:].sum().item())
+        scores.append(token_lp[0, start_idx:end_idx_exclusive].sum().item())
 
     return scores
 

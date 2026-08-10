@@ -61,12 +61,18 @@ git clone https://github.com/sylinrl/TruthfulQA.git
 
 The original spherical method normalizes an activation `h` and rotates it on a
 Euclidean sphere. It remains the default and its implementation is unchanged.
-Mahalanobis ellipsoidal steering instead estimates a center `c` and covariance
-`Sigma` from calibration data, maps activations to whitened coordinates
-`z = Sigma^(-1/2)(h-c)`, follows a spherical geodesic there, and maps back. It
-therefore preserves `||z||`, equivalently the Mahalanobis radius. This is a
-geodesic under the constant Mahalanobis metric; it is not claimed to be an
-ambient-Euclidean geodesic of an ellipsoid.
+Mahalanobis ellipsoidal steering estimates a center `c` and covariance `Sigma`
+from training questions only. The powered, scale-normalized map is
+`z = W_p(h-c)`, where `W_p = tau^p Sigma^(-p)` and
+`tau = tr(Sigma)/d`. Steering follows the same spherical geodesic in `z` space
+and applies `W_p^{-1}` afterward. Thus `p=0` is the identity geometry and
+`p=0.5` is full whitening; every value preserves `||z||` numerically.
+
+The center is independently configurable as `zero`, `global`, or
+`class-midpoint`. Pooled covariance always uses class-centered residuals, so a
+center sweep changes the steering origin without adding the class mean
+difference to covariance. Global covariance instead uses residuals about the
+selected center.
 
 Covariance controls ellipsoid axes: eigenvectors determine orientation and the
 square roots of eigenvalues determine axis sizes. `ellipsoid-diag` stores only
@@ -78,18 +84,25 @@ covariance is recommended because the class mean difference does not inflate an
 axis. The ellipsoid is a calibration-data geometry estimator, not a learned
 model.
 
-Extract activations once, then create diagonal artifacts:
+For matched TruthfulQA calibration, extract every scored answer token. An
+answer of length `L` gives each token weight `1/L`, so each answer has equal
+total fitting weight. Prompt construction, scored positions, and hook bounds
+are shared with evaluation.
+
+Extract scored activations once, then create diagonal artifacts:
 
 ```bash
-python get_activations.py llama3.1-8B-Instruct --layer 14 --save_dir ./features
+python get_activations.py Qwen2.5-3B-Instruct --layer 19 \
+  --activation-positions scored --feature-dtype float16 --save_dir ./features
 python get_prototypes.py \
-  --feature_file ./features/llama3.1-8B-Instruct_layer14.npz \
+  --feature_file ./features/Qwen2.5-3B-Instruct_layer19_scored.npz \
   --save_dir ./prototypes_ellipsoid_diag \
   --geometry ellipsoid-diag --covariance-source pooled \
+  --center-mode global --whitening-power 0.5 \
   --shrinkage 0.1 --variance-floor 1e-5
-python evaluate_mc.py llama3.1-8B-Instruct \
-  --prototype_path ./prototypes_ellipsoid_diag/llama3.1-8B-Instruct_layer14_fold0.npz \
-  --steering-geometry auto --layer 14 --kappa 20 --alpha 0.7 --beta -0.15
+python evaluate_mc.py Qwen2.5-3B-Instruct \
+  --prototype_path ./prototypes_ellipsoid_diag/Qwen2.5-3B-Instruct_layer19_fold0.npz \
+  --steering-geometry auto --layer 19 --kappa 20 --alpha 0.8 --beta -0.8
 ```
 
 For low rank, replace the prototype command with:
@@ -124,12 +137,30 @@ python evaluate_mc.py llama3.1-8B-Instruct --prototype_path prototypes_ellipsoid
 
 Version-2 artifacts contain `artifact_version`, `geometry`,
 `covariance_source`, `shrinkage`, `variance_floor`, `center`, `mu_T`, `mu_H`,
-fold metadata, axis sizes, and training-radius quantiles. Diagonal artifacts
+`center_mode`, `whitening_power`, `tau`, feature metadata, fold metadata, axis
+sizes, and training-radius quantiles. Diagonal artifacts
 add `diag_var`; low-rank artifacts add `basis`, `eigvals`, `residual_var`, and
 `cov_rank`. Ellipsoidal prototypes live in whitened coordinates. Legacy files
 containing only prototypes and fold metadata are treated as spherical. Radius
 quantiles are diagnostics only; every activation retains its own Mahalanobis
 radius rather than being projected onto a fixed boundary.
+
+Run the staged validation-only search (center, then power, then covariance):
+
+```bash
+python sweep_ellipsoid.py --model-name Qwen2.5-3B-Instruct --stage all \
+  --feature-file ./features/Qwen2.5-3B-Instruct_layer19_scored.npz \
+  --layer 19 --fold 0 --output-dir ./sweeps/qwen3b_fold0 \
+  --kappa 20 --alpha 0.8 --beta -0.8
+```
+
+`--dry-run` prints configurations and `--resume` skips completed hashes. The
+sweep evaluates validation only, caches raw spectra, writes JSON/CSV summaries,
+freezes the best settings, and prints (without executing) the held-out test
+command. With one validation split, the score is
+`MC2 - 0.25 * abs(trigger_rate - 0.9)` and the unavailable cross-fold standard
+deviation is marked explicitly. Older ellipsoid artifacts default to global
+centering and `p=0.5`.
 
 ### TruthfulQA
 
