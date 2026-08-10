@@ -30,7 +30,8 @@ from baukit import TraceDict
 # spherical_steering.py lives in parent directory (ICML2026/)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from steering_artifacts import load_steering_artifact, build_intervention
-from utils_generic import HF_NAMES, MMLU_CATEGORIES, set_seed
+from utils_generic import (HF_NAMES, MMLU_CATEGORIES, set_seed,
+                           format_winogrande_eval_prompt)
 
 
 # ============================================================
@@ -73,11 +74,7 @@ def format_mmlu_prompt(tokenizer, question, choices):
 
 
 def format_winogrande_prompt(sentence, option1, option2):
-    return (
-        f"Q: {sentence}\n"
-        f"Which option correctly fills the blank?\n"
-        f"1) {option1}\n2) {option2}\nA:"
-    )
+    return format_winogrande_eval_prompt(sentence, option1, option2)
 
 
 def format_boolq_prompt(passage, question):

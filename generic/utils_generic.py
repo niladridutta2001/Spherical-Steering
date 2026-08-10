@@ -35,6 +35,63 @@ HF_NAMES = {
 }
 
 
+def format_winogrande_eval_prompt(sentence, option1, option2):
+    """Prompt shared by matched-token extraction and evaluation."""
+    return (f"Q: {sentence}\nWhich option correctly fills the blank?\n"
+            f"1) {option1}\n2) {option2}\nA:")
+
+
+def get_winogrande_scored_data(num_samples=1000, seed=42):
+    """Return exact evaluation prompt/candidate pairs from shuffled train data."""
+    dataset = load_dataset("allenai/winogrande", "winogrande_xl")['train']
+    dataset = dataset.shuffle(seed=seed).select(range(min(num_samples, len(dataset))))
+    prompts, candidates, labels, q_indices, answer_indices = [], [], [], [], []
+    for i, item in enumerate(dataset):
+        options = [item['option1'], item['option2']]
+        correct = int(item['answer']) - 1
+        base = format_winogrande_eval_prompt(item['sentence'], *options)
+        for j, option in enumerate(options):
+            prompts.append(base); candidates.append(option)
+            labels.append(int(j == correct)); q_indices.append(i); answer_indices.append(j)
+    return prompts, candidates, np.asarray(labels), np.asarray(q_indices), np.asarray(answer_indices)
+
+
+def get_scored_activations(model, tokenizer, base_prompts, candidates, labels,
+                           q_indices, answer_indices, layer_idx, device,
+                           feature_dtype='float16'):
+    """Extract hidden states whose logits score exactly the candidate tokens."""
+    layer_name = f"model.layers.{layer_idx}"
+    acts, out_y, out_q, out_answer, offsets, lengths, weights = [], [], [], [], [], [], []
+    dtype = np.float16 if feature_dtype == 'float16' else np.float32
+    model.eval()
+    rows = zip(base_prompts, candidates, labels, q_indices, answer_indices)
+    with torch.no_grad():
+        for base, candidate, label, q_idx, answer_idx in tqdm(
+                rows, total=len(base_prompts), desc='Extracting scored features'):
+            prompt_ids = tokenizer(base, add_special_tokens=False,
+                                   return_tensors='pt').input_ids.to(device)
+            option_ids = tokenizer(' ' + candidate, add_special_tokens=False,
+                                   return_tensors='pt').input_ids.to(device)
+            input_ids = torch.cat((prompt_ids, option_ids), dim=1)
+            start = prompt_ids.shape[1] - 1
+            stop = start + option_ids.shape[1]
+            with TraceDict(model, [layer_name]) as ret:
+                model(input_ids)
+            hidden = ret[layer_name].output
+            hidden = hidden[0] if isinstance(hidden, tuple) else hidden
+            selected = hidden[0, start:stop].float().cpu().numpy().astype(dtype)
+            length = option_ids.shape[1]
+            if len(selected) != length:
+                raise RuntimeError('scored activation count does not match candidate length')
+            acts.extend(selected); out_y.extend([label]*length); out_q.extend([q_idx]*length)
+            out_answer.extend([answer_idx]*length); offsets.extend(range(length))
+            lengths.extend([length]*length); weights.extend([1.0/length]*length)
+    return dict(activations=np.asarray(acts, dtype=dtype), labels=np.asarray(out_y),
+                q_indices=np.asarray(out_q), answer_indices=np.asarray(out_answer),
+                token_offsets=np.asarray(offsets), answer_lengths=np.asarray(lengths),
+                sample_weights=np.asarray(weights, dtype=np.float32))
+
+
 # ==================== MMLU Categories ====================
 
 MMLU_CATEGORIES = {

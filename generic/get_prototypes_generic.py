@@ -51,6 +51,8 @@ def main():
 
     data = np.load(args.feature_file)
     X, y, q_indices = data['activations'], data['labels'], data['q_indices']
+    sample_weights = (np.asarray(data['sample_weights'], dtype=np.float64)
+                      if 'sample_weights' in data else np.ones(len(X), dtype=np.float64))
     print(f"Loaded {len(X)} samples ({sum(y)} correct, {len(y)-sum(y)} incorrect), dim={X.shape[1]}")
 
     if args.validation_fraction:
@@ -60,18 +62,21 @@ def main():
     else:
         fit_qs, validation_qs = np.unique(q_indices), np.array([], dtype=q_indices.dtype)
         fit_mask = np.ones(len(X), dtype=bool)
-    X_fit, y_fit = X[fit_mask], y[fit_mask]
+    X_fit, y_fit, weights_fit = X[fit_mask], y[fit_mask], sample_weights[fit_mask]
     print(f"Fit: {len(fit_qs)} questions | Development validation: {len(validation_qs)} questions")
 
     if args.geometry == 'sphere':
-        diff = np.mean(X_fit[y_fit == 1], axis=0) - np.mean(X_fit[y_fit == 0], axis=0)
+        mean_true = np.average(X_fit[y_fit == 1], axis=0, weights=weights_fit[y_fit == 1])
+        mean_false = np.average(X_fit[y_fit == 0], axis=0, weights=weights_fit[y_fit == 0])
+        diff = mean_true - mean_false
         artifact = {'mu_T': normalize(diff), 'mu_H': -normalize(diff),
-                    'center': np.mean(X_fit, axis=0)}
+                    'center': np.average(X_fit, axis=0, weights=weights_fit)}
     else:
         artifact = fit_ellipsoid_geometry(
             X_fit, y_fit, args.geometry, args.covariance_source, args.shrinkage,
             args.variance_floor, args.cov_rank,
             tuple(float(x) for x in args.radius_quantiles.split(',')),
+            sample_weights=weights_fit,
             center_mode=args.center_mode,
             whitening_power=args.whitening_power)
         artifact = {k: v for k, v in artifact.items() if k not in ('m_T', 'm_H')}
@@ -87,7 +92,9 @@ def main():
                     split_seed=np.array(args.split_seed),
                     dataset=np.array(str(data['dataset'].item()) if 'dataset' in data else ''),
                     data_seed=np.array(int(data['data_seed'].item()) if 'data_seed' in data else 42),
-                    dev_num_samples=np.array(int(data['dev_num_samples'].item()) if 'dev_num_samples' in data else -1))
+                    dev_num_samples=np.array(int(data['dev_num_samples'].item()) if 'dev_num_samples' in data else -1),
+                    activation_positions=np.array(str(data['activation_positions'].item()) if 'activation_positions' in data else 'last'),
+                    prompt_format=np.array(str(data['prompt_format'].item()) if 'prompt_format' in data else 'legacy'))
     artifact = {k: (v.astype(np.float32) if isinstance(v, np.ndarray) and
                      np.issubdtype(v.dtype, np.floating) else v) for k, v in artifact.items()}
 

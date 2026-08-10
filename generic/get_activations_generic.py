@@ -21,7 +21,8 @@ import numpy as np
 import os
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from utils_generic import HF_NAMES, set_seed, get_dataset_data, get_layer_activations
+from utils_generic import (HF_NAMES, set_seed, get_dataset_data, get_layer_activations,
+                           get_winogrande_scored_data, get_scored_activations)
 
 
 def main():
@@ -37,6 +38,8 @@ def main():
     parser.add_argument('--model_dir', type=str, default=None,
                         help="Local model directory (overrides model_name)")
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--activation-positions', choices=['last', 'scored'], default='last')
+    parser.add_argument('--feature-dtype', choices=['float16', 'float32'], default='float32')
 
     args = parser.parse_args()
     set_seed(args.seed)
@@ -58,10 +61,16 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 2. Load Data
-    prompts, labels, q_indices = get_dataset_data(
-        args.dataset, split=args.split, num_samples=args.num_samples,
-        seed=args.seed
-    )
+    if args.activation_positions == 'scored':
+        if args.dataset != 'winogrande' or args.split != 'train':
+            raise ValueError('scored extraction currently supports WinoGrande train only')
+        n = args.num_samples if args.num_samples is not None else 1000
+        prompts, candidates, labels, q_indices, answer_indices = \
+            get_winogrande_scored_data(n, args.seed)
+    else:
+        prompts, labels, q_indices = get_dataset_data(
+            args.dataset, split=args.split, num_samples=args.num_samples,
+            seed=args.seed)
 
     print(f"\n=== Data Statistics ===")
     print(f"Total samples: {len(prompts)}")
@@ -69,17 +78,32 @@ def main():
     print(f"Example prompt: {prompts[0][:200]}...")
 
     # 3. Extract Features
-    activations = get_layer_activations(model, tokenizer, prompts, args.layer, device)
+    if args.activation_positions == 'scored':
+        features = get_scored_activations(
+            model, tokenizer, prompts, candidates, labels, q_indices,
+            answer_indices, args.layer, device, args.feature_dtype)
+        activations = features.pop('activations')
+    else:
+        activations = get_layer_activations(model, tokenizer, prompts, args.layer, device)
+        if args.feature_dtype == 'float16':
+            activations = activations.astype(np.float16)
+        features = dict(labels=labels, q_indices=q_indices)
 
     # 4. Save
     os.makedirs(args.save_dir, exist_ok=True)
-    save_name = f"{args.model_name}_{args.dataset}_{args.split}_l{args.layer}.npz"
+    suffix = '_scored' if args.activation_positions == 'scored' else ''
+    save_name = f"{args.model_name}_{args.dataset}_{args.split}_l{args.layer}{suffix}.npz"
     save_path = os.path.join(args.save_dir, save_name)
 
-    np.savez(save_path, activations=activations, labels=labels, q_indices=q_indices,
+    np.savez(save_path, activations=activations, **features,
              dataset=np.array(args.dataset), split=np.array(args.split),
              data_seed=np.array(args.seed),
-             dev_num_samples=np.array(args.num_samples if args.num_samples is not None else -1))
+             dev_num_samples=np.array(
+                 args.num_samples if args.num_samples is not None else
+                 (1000 if args.activation_positions == 'scored' else -1)),
+             activation_positions=np.array(args.activation_positions),
+             prompt_format=np.array('match-evaluation' if args.activation_positions == 'scored' else 'legacy'),
+             feature_dtype=np.array(args.feature_dtype))
     print(f"Saved to {save_path}")
 
 

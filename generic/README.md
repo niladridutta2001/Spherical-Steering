@@ -80,10 +80,11 @@ validation, and fit the artifact on the remaining 800:
 ```bash
 python get_activations_generic.py --model_name Qwen2.5-3B-Instruct \
   --dataset winogrande --split train --num_samples 1000 --layer 19 \
+  --activation-positions scored --feature-dtype float16 \
   --seed 42 --save_dir ./features_generic
 
 python get_prototypes_generic.py \
-  --feature_file ./features_generic/Qwen2.5-3B-Instruct_winogrande_train_l19.npz \
+  --feature_file ./features_generic/Qwen2.5-3B-Instruct_winogrande_train_l19_scored.npz \
   --save_dir ./prototypes_generic --geometry ellipsoid-lowrank \
   --covariance-source pooled --center-mode class-midpoint \
   --whitening-power 0.25 --cov-rank 32 --shrinkage 0.1 \
@@ -95,7 +96,7 @@ Use only the 200 development-validation questions for hyperparameter selection:
 ```bash
 python evaluate_generic.py --model_name Qwen2.5-3B-Instruct \
   --dataset winogrande --eval-split dev-validation --layer 19 \
-  --prototype_path ./prototypes_generic/Qwen2.5-3B-Instruct_winogrande_train_l19_proto.npz \
+  --prototype_path ./prototypes_generic/Qwen2.5-3B-Instruct_winogrande_train_l19_scored_proto.npz \
   --steering-geometry ellipsoid --kappa 20 --alpha 0.8 --beta -0.8
 ```
 
