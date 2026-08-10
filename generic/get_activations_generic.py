@@ -76,7 +76,10 @@ def main():
     save_name = f"{args.model_name}_{args.dataset}_{args.split}_l{args.layer}.npz"
     save_path = os.path.join(args.save_dir, save_name)
 
-    np.savez(save_path, activations=activations, labels=labels, q_indices=q_indices)
+    np.savez(save_path, activations=activations, labels=labels, q_indices=q_indices,
+             dataset=np.array(args.dataset), split=np.array(args.split),
+             data_seed=np.array(args.seed),
+             dev_num_samples=np.array(args.num_samples if args.num_samples is not None else -1))
     print(f"Saved to {save_path}")
 
 

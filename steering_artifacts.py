@@ -31,6 +31,9 @@ def load_steering_artifact(path, device="cpu"):
                     "whitening_power", "variance_scale", "activation_positions",
                     "prompt_format"):
             artifact[key] = _scalar(data, key)
+        for key in ("dataset", "data_seed", "dev_num_samples", "split_seed",
+                    "validation_fraction"):
+            artifact[key] = _scalar(data, key)
         artifact["center_mode"] = artifact.get("center_mode") or "global"
         artifact["whitening_power"] = 0.5 if artifact.get("whitening_power") is None else float(artifact["whitening_power"])
         for key in ("train_q_indices", "validation_q_indices", "test_q_indices"):

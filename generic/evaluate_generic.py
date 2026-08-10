@@ -4,7 +4,7 @@ Evaluate MC tasks with Spherical Steering.
 Evaluation logic (MC1 style):
   1. For each question, construct full prompts for ALL options.
   2. Calculate log_prob for the option text part only.
-  3. Apply length normalization: score = mean(log_probs).
+  3. Score each option by the sum of its conditional token log-probabilities.
   4. Select option with max score → compare with ground truth.
 
 Supported datasets: COPA, StoryCloze, MMLU, Winogrande, BoolQ
@@ -89,7 +89,7 @@ def format_boolq_prompt(passage, question):
 # ============================================================
 
 def calculate_option_score(model, tokenizer, base_prompt, option_text,
-                           hook_fn, layer_name, device, normalize_length=True):
+                           hook_fn, layer_name, device, normalize_length=False):
     """
     Calculate log probability score for an option.
     Scores only the option tokens (after the prompt).
@@ -249,10 +249,24 @@ def evaluate_mmlu_global(model, tokenizer, hook_fn, layer_name, device,
                                 all_items, steering_stats)
 
 
-def evaluate_winogrande(model, tokenizer, hook_fn, layer_name, device, steering_stats):
-    """Evaluate on Winogrande validation set."""
-    print("Loading Winogrande validation set...")
-    dataset = load_dataset("winogrande", "winogrande_xl")['validation']
+def evaluate_winogrande(model, tokenizer, hook_fn, layer_name, device,
+                        steering_stats, artifact, eval_split='official'):
+    """Evaluate on development-validation or the full official validation set."""
+    if eval_split == 'dev-validation':
+        validation_ids = artifact.get('validation_q_indices')
+        if validation_ids is None or not len(validation_ids):
+            raise ValueError("artifact has no development-validation split")
+        data_seed = int(artifact.get('data_seed') or 42)
+        n_development = int(artifact.get('dev_num_samples') or -1)
+        if n_development <= 0:
+            raise ValueError("artifact is missing a valid dev_num_samples value")
+        print(f"Loading {len(validation_ids)} WinoGrande development-validation questions...")
+        dataset = load_dataset("winogrande", "winogrande_xl")['train'].shuffle(seed=data_seed)
+        dataset = dataset.select(range(min(n_development, len(dataset))))
+        dataset = dataset.select([int(i) for i in validation_ids])
+    else:
+        print("Loading full WinoGrande official validation set...")
+        dataset = load_dataset("winogrande", "winogrande_xl")['validation']
     print(f"Evaluating on {len(dataset)} samples...")
 
     correct, total = 0, 0
@@ -323,8 +337,12 @@ def main():
                         help="Local model directory (overrides model_name)")
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--steering-geometry', choices=['auto', 'sphere', 'ellipsoid'], default='auto')
+    parser.add_argument('--eval-split', choices=['official', 'dev-validation'], default='official',
+                        help='WinoGrande selection split or final official validation set')
 
     args = parser.parse_args()
+    if args.eval_split == 'dev-validation' and args.dataset != 'winogrande':
+        parser.error('--eval-split dev-validation is currently supported only for winogrande')
     set_seed(args.seed)
 
     # Load model
@@ -360,8 +378,11 @@ def main():
     elif args.dataset == 'mmlu_global':
         accuracy = evaluate_mmlu_global(model, tokenizer, hook_fn, layer_name, device, steering_stats)
     elif args.dataset == 'winogrande':
-        accuracy = evaluate_winogrande(model, tokenizer, hook_fn, layer_name, device, steering_stats)
+        accuracy = evaluate_winogrande(model, tokenizer, hook_fn, layer_name, device,
+                                       steering_stats, artifact, args.eval_split)
     elif args.dataset == 'boolq':
+        if args.eval_split != 'official':
+            raise ValueError('--eval-split dev-validation is currently supported only for winogrande')
         accuracy = evaluate_boolq(model, tokenizer, hook_fn, layer_name, device, steering_stats)
 
     # Print results
@@ -369,6 +390,8 @@ def main():
     print("FINAL RESULTS")
     print("=" * 50)
     print(f"Dataset:    {args.dataset}")
+    if args.dataset == 'winogrande':
+        print(f"Eval split: {args.eval_split}")
     print(f"Model:      {args.model_name}")
     print(f"Layer:      {args.layer}")
     print(f"Steering:   {'OFF' if args.disable_steering else 'ON'}")

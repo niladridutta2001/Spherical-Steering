@@ -11,6 +11,7 @@ import argparse
 import numpy as np
 import os
 import sys
+from sklearn.model_selection import train_test_split
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ellipsoid_geometry import fit_ellipsoid_geometry
 
@@ -18,6 +19,16 @@ from ellipsoid_geometry import fit_ellipsoid_geometry
 def normalize(v):
     norm = np.linalg.norm(v)
     return v if norm == 0 else v / norm
+
+
+def split_development_questions(q_indices, validation_fraction=0.2, seed=42):
+    """Return disjoint fit/validation question IDs for development data."""
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError("validation_fraction must lie strictly between 0 and 1")
+    questions = np.unique(q_indices)
+    fit_qs, validation_qs = train_test_split(
+        questions, test_size=validation_fraction, random_state=seed, shuffle=True)
+    return np.sort(fit_qs), np.sort(validation_qs)
 
 
 def main():
@@ -33,19 +44,32 @@ def main():
                         default='global')
     parser.add_argument('--whitening-power', type=float, default=0.5)
     parser.add_argument('--radius-quantiles', default='0.5,0.9,0.95,0.99')
+    parser.add_argument('--validation-fraction', type=float, default=0.0,
+                        help='Question fraction held out for development validation')
+    parser.add_argument('--split-seed', type=int, default=42)
     args = parser.parse_args()
 
     data = np.load(args.feature_file)
-    X, y = data['activations'], data['labels']
+    X, y, q_indices = data['activations'], data['labels'], data['q_indices']
     print(f"Loaded {len(X)} samples ({sum(y)} correct, {len(y)-sum(y)} incorrect), dim={X.shape[1]}")
 
+    if args.validation_fraction:
+        fit_qs, validation_qs = split_development_questions(
+            q_indices, args.validation_fraction, args.split_seed)
+        fit_mask = np.isin(q_indices, fit_qs)
+    else:
+        fit_qs, validation_qs = np.unique(q_indices), np.array([], dtype=q_indices.dtype)
+        fit_mask = np.ones(len(X), dtype=bool)
+    X_fit, y_fit = X[fit_mask], y[fit_mask]
+    print(f"Fit: {len(fit_qs)} questions | Development validation: {len(validation_qs)} questions")
+
     if args.geometry == 'sphere':
-        diff = np.mean(X[y == 1], axis=0) - np.mean(X[y == 0], axis=0)
+        diff = np.mean(X_fit[y_fit == 1], axis=0) - np.mean(X_fit[y_fit == 0], axis=0)
         artifact = {'mu_T': normalize(diff), 'mu_H': -normalize(diff),
-                    'center': np.mean(X, axis=0)}
+                    'center': np.mean(X_fit, axis=0)}
     else:
         artifact = fit_ellipsoid_geometry(
-            X, y, args.geometry, args.covariance_source, args.shrinkage,
+            X_fit, y_fit, args.geometry, args.covariance_source, args.shrinkage,
             args.variance_floor, args.cov_rank,
             tuple(float(x) for x in args.radius_quantiles.split(',')),
             center_mode=args.center_mode,
@@ -57,7 +81,13 @@ def main():
                     variance_floor=np.array(args.variance_floor, dtype=np.float32),
                     cov_rank=np.array(artifact.get('cov_rank', 0)),
                     center_mode=np.array(args.center_mode),
-                    whitening_power=np.array(args.whitening_power, dtype=np.float32))
+                    whitening_power=np.array(args.whitening_power, dtype=np.float32),
+                    train_q_indices=fit_qs, validation_q_indices=validation_qs,
+                    validation_fraction=np.array(args.validation_fraction, dtype=np.float32),
+                    split_seed=np.array(args.split_seed),
+                    dataset=np.array(str(data['dataset'].item()) if 'dataset' in data else ''),
+                    data_seed=np.array(int(data['data_seed'].item()) if 'data_seed' in data else 42),
+                    dev_num_samples=np.array(int(data['dev_num_samples'].item()) if 'dev_num_samples' in data else -1))
     artifact = {k: (v.astype(np.float32) if isinstance(v, np.ndarray) and
                      np.issubdtype(v.dtype, np.floating) else v) for k, v in artifact.items()}
 
