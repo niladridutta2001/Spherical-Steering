@@ -437,12 +437,81 @@ radius was 47.8633 before and after intervention, and the maximum relative
 radius error was $2.10\times10^{-7}$, empirically verifying the intended
 invariance.
 
-For context, an earlier spherical fold-0 run using $\alpha=0.6$ and
-$\beta=0.4$ obtained MC1/MC2/MC3 of $0.4377/0.6350/0.3958$. Against that
-run, the new frozen ellipsoid test result is higher by 0.1051, 0.1057, and
-0.1377 respectively. This comparison is informative but not yet a final
-two-fold estimate. Fold 1 must independently refit and retune the geometry
-before the two disjoint test halves are combined.
+The independent fold-1 sweep selected a different geometry: zero centering,
+$p=0.375$, rank 128, pooled covariance, and shrinkage 0.1. Its validation
+MC1/MC2/MC3 were $0.6220/0.8016/0.6023$ with a 95.3\% trigger rate; the frozen
+test values were $0.4853/0.6812/0.4656$ with a 95.8\% trigger rate. The stable
+gate frequency but lower test scores show that the single validation subset
+was optimistic and reinforce the need to aggregate both outer test folds.
+
+Because the two test sets are disjoint and contain 409 and 408 questions, we
+combine any metric $M$ as
+\begin{equation}
+ M_{\rm combined}=\frac{409M_0+408M_1}{817}.
+\end{equation}
+Table~\ref{tab:combined-comparison} gives the resulting matched-pipeline
+comparison. The unsteered and spherical artifacts use the same scored-token
+features and question folds as the ellipsoid. Spherical steering uses the
+fixed Qwen setting $\kappa=20$, $\alpha=0.6$, $\beta=0.4$; the ellipsoid uses
+$\kappa=20$, $\alpha=0.8$, $\beta=-0.8$ with validation-selected geometry.
+
+\begin{table}[ht]
+\centering
+\caption{Two-fold Qwen2.5-3B-Instruct test results under the matched
+scored-token pipeline.}
+\label{tab:combined-comparison}
+\begin{tabular}{lrrrrr}
+\toprule
+Method & Trigger & MC1 & MC2 & MC3 & MC Avg.\\
+\midrule
+Unsteered & 0.0\% & 0.2558 & 0.4181 & 0.1956 & 0.2898\\
+Sphere & 85.9\% & 0.4394 & 0.6449 & 0.4177 & 0.5007\\
+Powered ellipsoid & 88.0\% & \textbf{0.5141} & \textbf{0.7110} &
+\textbf{0.4996} & \textbf{0.5749}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Relative to the matched sphere, the powered ellipsoid gains 0.0747 MC1,
+0.0661 MC2, 0.0819 MC3, and 0.0742 MC Avg. Relative to the unsteered model,
+the respective gains are 0.2583, 0.2929, 0.3040, and 0.2851. These differences
+demonstrate a large benefit under the tested protocol, but the sphere used
+fixed paper/Qwen steering parameters whereas the ellipsoid geometry was tuned
+on each validation fold. A strictly controlled geometry ablation should also
+select spherical $\alpha$ and $\beta$ independently on each validation fold.
+
+\subsection{Comparison with the original paper}
+
+Table~\ref{tab:paper-comparison} compares our two-fold multiple-choice result
+with Table~1 of the Spherical Steering paper. The published models are larger
+and use last-token calibration, so this is a cross-model, cross-method
+comparison rather than a like-for-like reproduction.
+
+\begin{table}[ht]
+\centering
+\caption{TruthfulQA comparison with published Spherical Steering results.
+All entries are percentages.}
+\label{tab:paper-comparison}
+\begin{tabular}{lrrrr}
+\toprule
+Model and method & MC1 & MC2 & MC3 & MC Avg.\\
+\midrule
+Paper Qwen2.5-7B baseline & 35.87 & 54.95 & 26.62 & 39.15\\
+Paper Qwen2.5-7B sphere & 48.71 & 66.90 & 39.16 & 51.59\\
+Paper LLaMA-3.1-8B sphere & 49.95 & 68.51 & 41.05 & 53.17\\
+Our Qwen2.5-3B ellipsoid & \textbf{51.41} & \textbf{71.10} &
+\textbf{49.96} & \textbf{57.49}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Numerically, the 3B ellipsoid exceeds the paper's Qwen-7B sphere by 2.70,
+4.20, and 10.80 percentage points on MC1, MC2, and MC3, respectively. It also
+exceeds the LLaMA-8B sphere by 1.46, 2.59, and 8.91 points. These numbers do
+not establish universal superiority: model family and size, calibration
+positions, and the available ellipsoid hyperparameters differ. Moreover, the
+paper reports open-ended TRUE, INFO, and TRUE$\times$INFO, whereas our current
+confirmed findings are multiple-choice only.
 
 \section{Earlier Exploratory Fold-0 Results}
 
@@ -472,8 +541,9 @@ shrinkage $0.1$, variance floor $10^{-5}$, $\kappa=20$, $\alpha=0.8$, and
 $\beta=-0.8$.  On the untouched fold-0 test split it obtained MC1 $0.3692$,
 MC2 $0.6079$, and MC3 $0.3305$, for MC Avg. $0.4359$, with a 91.7\% trigger
 rate.  The stable validation-to-test trigger rate suggests that gate frequency
-generalized, while the largest metric change occurred in MC1.  Fold-1 tuning
-and evaluation are required before reporting a two-fold result.
+generalized, while the largest metric change occurred in MC1. At this earlier
+stage fold 1 had not yet been run; the completed matched-token two-fold result
+is reported in Table~\ref{tab:combined-comparison}.
 
 \subsection{Diagonal selectivity sweep}
 
