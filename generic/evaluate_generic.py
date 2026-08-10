@@ -261,12 +261,12 @@ def evaluate_winogrande(model, tokenizer, hook_fn, layer_name, device,
         if n_development <= 0:
             raise ValueError("artifact is missing a valid dev_num_samples value")
         print(f"Loading {len(validation_ids)} WinoGrande development-validation questions...")
-        dataset = load_dataset("winogrande", "winogrande_xl")['train'].shuffle(seed=data_seed)
+        dataset = load_dataset("allenai/winogrande", "winogrande_xl")['train'].shuffle(seed=data_seed)
         dataset = dataset.select(range(min(n_development, len(dataset))))
         dataset = dataset.select([int(i) for i in validation_ids])
     else:
         print("Loading full WinoGrande official validation set...")
-        dataset = load_dataset("winogrande", "winogrande_xl")['validation']
+        dataset = load_dataset("allenai/winogrande", "winogrande_xl")['validation']
     print(f"Evaluating on {len(dataset)} samples...")
 
     correct, total = 0, 0

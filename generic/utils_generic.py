@@ -226,7 +226,7 @@ def get_winogrande_data(split='train', num_samples=None, seed=42):
     """
     print(f"Loading Winogrande (split={split})...")
     hf_split = 'train' if split == 'train' else 'validation'
-    dataset = load_dataset("winogrande", "winogrande_xl")[hf_split]
+    dataset = load_dataset("allenai/winogrande", "winogrande_xl")[hf_split]
 
     if split == 'train':
         dataset = dataset.shuffle(seed=seed)
