@@ -34,13 +34,15 @@
 \begin{abstract}
 We describe a Mahalanobis ellipsoidal extension of Spherical Steering for
 inference-time control of language-model hidden states.  The method estimates
-the center and covariance geometry of calibration activations, whitens a
-hidden state, performs a norm-preserving spherical rotation in whitened
-coordinates, and maps the result back to the original representation space.
-The construction preserves the activation's Mahalanobis radius.  We present
+the center and covariance geometry of calibration activations, applies a
+scale-normalized fractional whitening map, performs a norm-preserving
+spherical rotation in transformed coordinates, and maps the result back to
+the original representation space. We present
 diagonal and low-rank-plus-isotropic covariance representations, a stable
 matrix-free intervention, leakage-safe nested evaluation on TruthfulQA, and
-the validation procedure used for Qwen2.5-3B-Instruct.  This ellipsoidal method
+the validation procedure used for Qwen2.5-3B-Instruct. The construction
+preserves a powered-Mahalanobis transformed radius (the conventional
+Mahalanobis radius when $p=1/2$). This ellipsoidal method
 is an extension of, rather than a method evaluated in, the original Spherical
 Steering paper.
 \end{abstract}
@@ -159,11 +161,11 @@ The diagonal estimator stores only
   \bm c\in\R^d,
   \qquad \bm v=\operatorname{diag}(\bm\Sigma)\in\R^d.
 \end{equation}
-Whitening and coloring are elementwise:
+Powered whitening and coloring are elementwise:
 \begin{equation}
-  \bm W\bm u=\bm u\oslash\sqrt{\bm v},
+  \bm W_p\bm u=\bm u\odot(\bm v/\tau)^{-p},
   \qquad
-  \bm W^{-1}\bm u=\bm u\odot\sqrt{\bm v}.
+  \bm W_p^{-1}\bm u=\bm u\odot(\bm v/\tau)^p.
 \end{equation}
 This is the lowest-memory estimator, but it ignores correlations between hidden
 dimensions.
@@ -174,7 +176,7 @@ The low-rank estimator uses randomized truncated SVD of the fitting residual
 matrix and never constructs a dense $d\times d$ covariance or whitening
 matrix.  It represents
 \begin{equation}
- \bm\Sigma=m U\operatorname{diag}(\lambda_1,\ldots,\lambda_k)\bm U\trans
+ \bm\Sigma=\bm U\operatorname{diag}(\lambda_1,\ldots,\lambda_k)\bm U\trans
  +\sigma_\perp^2(\bm I-\bm U\bm U\trans),
 \end{equation}
 where $\bm U\in\R^{d\times k}$ has orthonormal columns.  Before shrinkage, the
@@ -184,19 +186,21 @@ residual variance is estimated by
   \frac{\operatorname{tr}(\widehat{\bm\Sigma})-
   \sum_{j=1}^{k}\lambda_j}{d-k}.
 \end{equation}
-The matrix-free whitening operation is
+Let $a_j=(\lambda_j/\tau)^{-p}$ and
+$a_\perp=(\sigma_\perp^2/\tau)^{-p}$. The matrix-free powered whitening
+operation is
 \begin{equation}
-\bm W\bm u = \frac{\bm u}{\sqrt{\sigma_\perp^2}}+
+\bm W_p\bm u = a_\perp\bm u+
 \bm U\left[
-\left(\bm\lambda^{-1/2}-(\sigma_\perp^2)^{-1/2}\bm 1\right)
+\left(\bm a-a_\perp\bm 1\right)
 \odot(\bm U\trans\bm u)
 \right],
 \end{equation}
-and inverse whitening is
+and inverse coloring uses the same expression with powers $+p$:
 \begin{equation}
-\bm W^{-1}\bm u = \sqrt{\sigma_\perp^2}\bm u+
+\bm W_p^{-1}\bm u = (\sigma_\perp^2/\tau)^p\bm u+
 \bm U\left[
-\left(\sqrt{\bm\lambda}-\sqrt{\sigma_\perp^2}\bm 1\right)
+\left((\bm\lambda/\tau)^p-(\sigma_\perp^2/\tau)^p\bm 1\right)
 \odot(\bm U\trans\bm u)
 \right].
 \end{equation}
@@ -210,7 +214,7 @@ The raw contrastive mean direction is
 For ellipsoidal steering, it is essential to whiten this direction before
 normalization:
 \begin{equation}
-  \bm d_z=\bm W\bm d,
+  \bm d_z=\bm W_p\bm d,
   \qquad
   \mTz=\frac{\bm d_z}{\norm{\bm d_z}},
   \qquad
@@ -279,14 +283,16 @@ activation dtype.
 
 \section{Mahalanobis-Radius Invariance}
 
-Because Slerp preserves unit norm and we restore the original $r_M$,
+Because Slerp preserves unit norm and we restore the original transformed
+radius $r_p$,
 \begin{align}
-  \norm{\bm W(\bm h'-\bm c)}^2
+  \norm{\bm W_p(\bm h'-\bm c)}^2
   &=\norm{\bm z'}^2\\
-  &=r_M^2\\
-  &=\norm{\bm W(\bm h-\bm c)}^2.
+  &=r_p^2\\
+  &=\norm{\bm W_p(\bm h-\bm c)}^2.
 \end{align}
-Equivalently,
+At $p=1/2$ this is, up to the common trace scale, the conventional
+Mahalanobis-radius invariant
 \begin{equation}
  (\bm h'-\bm c)\trans\bm\Sigma^{-1}(\bm h'-\bm c)
  =
@@ -311,20 +317,134 @@ We also report
 \begin{equation}
   \mathrm{MC\ Avg.}=\frac{\mathrm{MC1}+\mathrm{MC2}+\mathrm{MC3}}{3}.
 \end{equation}
+MC Avg. is a convenience summary used in this study; it is not one of the
+three official TruthfulQA multiple-choice metrics and does not replace their
+separate reporting.
 
-The tuning order is:
+\subsection{Evaluation metrics in detail}
+
+Let $s(a\mid q)$ be the conditional log-likelihood of candidate answer $a$
+under question prompt $q$. For an answer tokenization
+$a=(a_1,\ldots,a_L)$,
+\begin{equation}
+ s(a\mid q)=\sum_{t=1}^{L}\log p(a_t\mid q,a_{<t}).
+\end{equation}
+Thus evaluation uses the sum, rather than the mean, of answer-token log
+probabilities. Let $\mathcal A_T$ and $\mathcal A_F$ be the truthful and
+incorrect reference-answer sets, and let $a^\star$ denote TruthfulQA's
+designated best truthful answer. The per-question MC1 score is
+\begin{equation}
+ \mathrm{MC1}(q)=
+ \mathbb I\!\left[s(a^\star\mid q)>
+ \max_{b\in\mathcal A_F}s(b\mid q)\right].
+\end{equation}
+MC2 exponentiates and normalizes the candidate scores and reports the total
+probability assigned to truthful references:
+\begin{equation}
+ \mathrm{MC2}(q)=
+ \frac{\sum_{a\in\mathcal A_T}\exp s(a\mid q)}
+ {\sum_{c\in\mathcal A_T\cup\mathcal A_F}\exp s(c\mid q)}.
+\end{equation}
+For numerical stability, the implementation may subtract the maximum
+candidate score before exponentiation without changing the ratio. MC3 is
+\begin{equation}
+ \mathrm{MC3}(q)=\frac{1}{|\mathcal A_T|}
+ \sum_{a\in\mathcal A_T}
+ \mathbb I\!\left[s(a\mid q)>
+ \max_{b\in\mathcal A_F}s(b\mid q)\right].
+\end{equation}
+Dataset-level MC1, MC2, and MC3 are the respective means across questions.
+
+The paper also reports open-ended generation metrics produced by two
+pre-trained judge models: TRUE (\%) measures truthfulness and INFO (\%)
+measures informativeness. Following prior work, their product
+\begin{equation}
+ \mathrm{TRUE}\!\times\!\mathrm{INFO}
+ =\frac{\mathrm{TRUE}\cdot\mathrm{INFO}}{100}\quad(\%)
+\end{equation}
+is the primary open-ended metric when TRUE and INFO are expressed as
+percentages. The powered-ellipsoid findings reported in this document are
+currently multiple-choice results only. A complete paper-style comparison
+must additionally run the frozen configuration on open-ended generation and
+report TRUE, INFO, and TRUE$\times$INFO without tuning on test judgments.
+
+For the paper's other multiple-choice benchmarks---COPA, StoryCloze, BoolQ,
+MMLU, and WinoGrande---each candidate option is scored by the same summed
+conditional log-likelihood under its task prompt. The option with the highest
+score is selected and benchmark accuracy is reported. Those benchmarks are
+outside the present TruthfulQA experiment and should not be inferred from the
+MC1/MC2/MC3 results.
+
+Each outer fold first assigns approximately half of the 817 questions to an
+untouched test set. Twenty percent of the remaining development half is used
+for validation and the other eighty percent for fitting. Thus the effective
+fit:validation:test allocation is approximately $40:10:50$ (326--327,
+81--82, and 408--409 questions). The fitting subset alone estimates centers,
+class means, covariance spectra, and prototypes. The validation subset ranks
+configurations; it is never used to refit them. The frozen winner is finally
+evaluated once on the test subset.
+
+With $\kappa=20$, $\alpha=0.8$, and $\beta=-0.8$ fixed, the staged tuning order is:
 \begin{enumerate}
-  \item choose candidate layers using permissive gating on validation data;
-  \item fit a separate artifact for every layer and covariance configuration;
-  \item tune $\beta$ on validation data to calibrate intervention selectivity;
-  \item tune $\alpha$ at the selected $\beta$;
-  \item optionally tune shrinkage and covariance rank, still using validation;
-  \item freeze all choices and evaluate the corresponding outer test fold once.
+  \item at $p=0.5$, rank 128, and shrinkage 0.1, compare zero, global,
+        and class-midpoint centers (three evaluations);
+  \item holding the selected center fixed, compare
+        $p\in\{0,0.125,0.25,0.375,0.5\}$ (five evaluations);
+  \item holding the selected center and power fixed, compare ranks
+        $\{32,64,128,256\}$ crossed with shrinkage
+        $\{0.1,0.3,0.5,0.7\}$ (sixteen evaluations);
+  \item freeze the best of the 24 validation evaluations and execute one test
+        evaluation manually.
 \end{enumerate}
+The single-split selection score is
+\begin{equation}
+ J=\mathrm{MC2}-0.25\left|\rho_{\rm trigger}-0.9\right|.
+\end{equation}
+Raw spectra are cached and reused across compatible configurations. Invalid
+ranks are skipped, completed configuration hashes can be resumed, and the
+sweep code never invokes the test split.
 The second outer fold repeats the complete selection process independently.
 No parameter is changed after observing test results.
 
-\section{Preliminary Fold-0 Results}
+\section{Matched-Token Powered-Ellipsoid Findings}
+
+The staged fold-0 sweep selected class-midpoint centering, partial whitening
+$p=0.25$, rank 32, pooled within-class covariance, and shrinkage 0.1. This is
+not full Mahalanobis whitening: it retains more of the original spherical
+geometry while correcting the dominant correlated directions. The low rank
+also indicates that the useful anisotropic correction is concentrated in a
+small subspace rather than across all hidden dimensions.
+
+\begin{table}[ht]
+\centering
+\caption{Frozen fold-0 result for the selected matched-token powered ellipsoid.}
+\label{tab:powered-result}
+\begin{tabular}{lrrrrr}
+\toprule
+Split & Trigger & MC1 & MC2 & MC3 & MC Avg.\\
+\midrule
+Validation & 80.02\% & 0.5366 & 0.7667 & 0.5327 & 0.6120\\
+Test       & 80.20\% & 0.5428 & 0.7407 & 0.5335 & 0.6057\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The validation-to-test changes were $+0.0062$ for MC1, $-0.0259$ for MC2,
+and $+0.0008$ for MC3. The nearly unchanged trigger rate and MC1/MC3 values,
+together with the modest MC2 decline, provide evidence that the selected
+geometry transferred beyond the validation questions. The mean transformed
+radius was 47.8633 before and after intervention, and the maximum relative
+radius error was $2.10\times10^{-7}$, empirically verifying the intended
+invariance.
+
+For context, an earlier spherical fold-0 run using $\alpha=0.6$ and
+$\beta=0.4$ obtained MC1/MC2/MC3 of $0.4377/0.6350/0.3958$. Against that
+run, the new frozen ellipsoid test result is higher by 0.1051, 0.1057, and
+0.1377 respectively. This comparison is informative but not yet a final
+two-fold estimate. Fold 1 must independently refit and retune the geometry
+before the two disjoint test halves are combined.
+
+\section{Earlier Exploratory Fold-0 Results}
 
 Table~\ref{tab:validation} reports the validation results at layer 19.  These
 results motivated a more permissive ellipsoidal gate because whitening changes
@@ -474,45 +594,45 @@ and tuning procedure differ.
 \section{Reproducibility Commands}
 
 \begin{lstlisting}[language=bash]
-# Extract Qwen2.5-3B layer-19 activations.
+# Extract the exact layer-19 positions used to score each answer token.
 python get_activations.py Qwen2.5-3B-Instruct \
-  --layer 19 --save_dir ./features
+  --layer 19 --activation-positions scored \
+  --prompt-format match-evaluation --feature-dtype float16 \
+  --save_dir ./features
 
-# Fit low-rank ellipsoid artifacts with leakage-safe nested splits.
-python get_prototypes.py \
-  --feature_file ./features/Qwen2.5-3B-Instruct_layer19.npz \
-  --save_dir ./prototypes_qwen3b_ellipsoid_lowrank \
-  --geometry ellipsoid-lowrank \
-  --covariance-source pooled \
-  --shrinkage 0.1 --variance-floor 1e-5 --cov-rank 128 \
-  --num_folds 2 --shuffle-folds --seed 42 \
-  --validation-fraction 0.2
-
-# Validation evaluation.
-python evaluate_mc.py Qwen2.5-3B-Instruct \
-  --prototype_path \
-  ./prototypes_qwen3b_ellipsoid_lowrank/Qwen2.5-3B-Instruct_layer19_fold0.npz \
-  --eval-split validation --steering-geometry ellipsoid \
-  --layer 19 --kappa 20 --alpha 0.8 --beta -0.8
+# Run all 24 validation configurations for fold 0.
+python sweep_ellipsoid.py \
+  --model-name Qwen2.5-3B-Instruct --stage all \
+  --feature-file ./features/Qwen2.5-3B-Instruct_layer19_scored.npz \
+  --layer 19 --fold 0 --output-dir ./sweeps/qwen3b_fold0 \
+  --kappa 20 --alpha 0.8 --beta -0.8
 
 # Frozen fold-0 test evaluation.
 python evaluate_mc.py Qwen2.5-3B-Instruct \
-  --prototype_path \
-  ./prototypes_qwen3b_ellipsoid_lowrank/Qwen2.5-3B-Instruct_layer19_fold0.npz \
+  --prototype_path ./sweeps/qwen3b_fold0/artifact_bc77fe22e7ba.npz \
   --eval-split test --steering-geometry ellipsoid \
   --layer 19 --kappa 20 --alpha 0.8 --beta -0.8 \
-  --output_path ./results/qwen3b_lowrank_fold0_test.json
+  --save_details \
+  --output_path ./sweeps/qwen3b_fold0/final_test_bc77fe22e7ba.json
+
+# Repeat fitting, validation selection, and testing independently for fold 1.
+python sweep_ellipsoid.py \
+  --model-name Qwen2.5-3B-Instruct --stage all \
+  --feature-file ./features/Qwen2.5-3B-Instruct_layer19_scored.npz \
+  --layer 19 --fold 1 --output-dir ./sweeps/qwen3b_fold1 \
+  --kappa 20 --alpha 0.8 --beta -0.8
 \end{lstlisting}
 
 \section{Interpretation and Limitations}
 
 The diagonal estimator is inexpensive but assumes coordinate-wise independence.
-At Qwen layer 19 it produced a substantially lower trigger rate and weaker
-validation metrics than the rank-128 estimator.  The low-rank representation
-captures correlated activation directions and approached spherical validation
-performance while obtaining a higher MC1.  This observation is specific to
-the current layer, rank, split, and model and is not evidence that low-rank
-geometry universally dominates diagonal geometry.
+At Qwen layer 19 the earlier diagonal estimator produced a substantially lower
+trigger rate and weaker validation metrics than correlated low-rank models.
+Under matched-token fitting, the selected rank-32, $p=0.25$ representation
+outperformed the earlier spherical fold-0 reference on all three MC metrics.
+This supports partial, low-dimensional anisotropy correction for this setting;
+it is not evidence that the same center, power, or rank will dominate on fold
+1, other layers, or other models.
 
 Multiple-choice tuning alone can favor aggressive rotations that harm
 open-ended informativeness.  A complete study should additionally evaluate

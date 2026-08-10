@@ -29,6 +29,9 @@ def main():
     parser.add_argument('--shrinkage', type=float, default=0.1)
     parser.add_argument('--variance-floor', type=float, default=1e-5)
     parser.add_argument('--cov-rank', type=int, default=128)
+    parser.add_argument('--center-mode', choices=['zero', 'global', 'class-midpoint'],
+                        default='global')
+    parser.add_argument('--whitening-power', type=float, default=0.5)
     parser.add_argument('--radius-quantiles', default='0.5,0.9,0.95,0.99')
     args = parser.parse_args()
 
@@ -44,13 +47,17 @@ def main():
         artifact = fit_ellipsoid_geometry(
             X, y, args.geometry, args.covariance_source, args.shrinkage,
             args.variance_floor, args.cov_rank,
-            tuple(float(x) for x in args.radius_quantiles.split(',')))
+            tuple(float(x) for x in args.radius_quantiles.split(',')),
+            center_mode=args.center_mode,
+            whitening_power=args.whitening_power)
         artifact = {k: v for k, v in artifact.items() if k not in ('m_T', 'm_H')}
     artifact.update(artifact_version=np.array(2), geometry=np.array(args.geometry),
                     covariance_source=np.array(args.covariance_source),
                     shrinkage=np.array(args.shrinkage, dtype=np.float32),
                     variance_floor=np.array(args.variance_floor, dtype=np.float32),
-                    cov_rank=np.array(artifact.get('cov_rank', 0)))
+                    cov_rank=np.array(artifact.get('cov_rank', 0)),
+                    center_mode=np.array(args.center_mode),
+                    whitening_power=np.array(args.whitening_power, dtype=np.float32))
     artifact = {k: (v.astype(np.float32) if isinstance(v, np.ndarray) and
                      np.issubdtype(v.dtype, np.floating) else v) for k, v in artifact.items()}
 

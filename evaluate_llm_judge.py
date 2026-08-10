@@ -255,6 +255,7 @@ def main():
     avg_info = np.mean(info_scores)
     truth_acc = np.mean([r['truth_acc'] for r in results])
     info_acc = np.mean([r['info_acc'] for r in results])
+    true_x_info = truth_acc * info_acc
 
     # Save per-question results
     sfx = 'baseline' if args.disable_steering else f'steered_a{args.alpha}_b{args.beta}'
@@ -274,8 +275,9 @@ def main():
     print(f"Preset: {args.preset} | Steering: {'OFF' if args.disable_steering else 'ON'}")
     if not args.disable_steering:
         print(f"kappa={args.kappa} alpha={args.alpha} beta={args.beta}")
-    print(f"Truth: {avg_truth:.4f} | Info: {avg_info:.4f} | T*I: {avg_truth*avg_info:.4f}")
-    print(f"Truth Acc: {truth_acc:.4f} | Info Acc: {info_acc:.4f}")
+    print(f"Mean judge probabilities | Truth: {avg_truth:.4f} | Info: {avg_info:.4f}")
+    print(f"Official rates | TRUE: {100*truth_acc:.2f}% | INFO: {100*info_acc:.2f}% | "
+          f"TRUE*INFO: {100*true_x_info:.2f}%")
     print(f"Saved to: {out_file}")
     print(f"Diagnostics: {diagnostic_file}")
     print(f"{'='*50}")
@@ -290,7 +292,7 @@ def main():
         a = 0.0 if args.disable_steering else args.alpha
         b = 0.0 if args.disable_steering else args.beta
         k = 0.0 if args.disable_steering else args.kappa
-        f.write(f"{args.model_name},{args.layer},{fold_idx},{a},{b},{k},{args.preset},{steer},{avg_truth:.4f},{avg_info:.4f},{avg_truth*avg_info:.4f},{truth_acc:.4f},{info_acc:.4f}\n")
+        f.write(f"{args.model_name},{args.layer},{fold_idx},{a},{b},{k},{args.preset},{steer},{avg_truth:.4f},{avg_info:.4f},{true_x_info:.4f},{truth_acc:.4f},{info_acc:.4f}\n")
     print(f"Summary: {summary}")
     print("Steering diagnostics:", evaluation_diagnostics(artifact, steering_stats))
 
