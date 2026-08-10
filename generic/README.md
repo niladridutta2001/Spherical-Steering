@@ -105,6 +105,21 @@ questions by replacing `--eval-split dev-validation` with
 `--eval-split official`. Candidate scores use summed conditional token
 log-likelihood, matching the paper rather than length-normalized likelihood.
 
+Run the complete 24-configuration matched-token geometry sweep with:
+
+```bash
+python sweep_ellipsoid_generic.py \
+  --model-name Qwen2.5-3B-Instruct \
+  --feature-file ./features_generic/Qwen2.5-3B-Instruct_winogrande_train_l19_scored.npz \
+  --layer 19 --stage all --output-dir ./sweeps_winogrande_geometry \
+  --kappa 20 --alpha 0.8 --beta -0.8
+```
+
+It compares three centers, five whitening powers, and sixteen rank/shrinkage
+combinations on only the 200-question development-validation subset. It saves
+JSON/CSV summaries, supports `--resume`, and prints without executing the
+frozen command for all 1,267 official validation questions.
+
 Baseline (no steering):
 
 ```bash
