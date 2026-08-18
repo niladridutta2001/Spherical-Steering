@@ -222,6 +222,12 @@ See `generic/README.md` for details.
 | `steering_artifacts.py` | Safe shared artifact loader and intervention factory |
 | `utils.py` | Data loading and activation extraction helpers |
 
+The isolated [`ellipsoid_steering`](ellipsoid_steering/README.md) package adds
+the training-free LVLM hallucination-mode framework, including streaming
+grounded covariance fitting, displacement whitening, routed spectral
+suppression, two-pass hook control, cache validation, and synthetic invariant
+tests. It does not modify the TruthfulQA or generic benchmark pipelines.
+
 ## Citation
 
 If you find this work useful, please cite:

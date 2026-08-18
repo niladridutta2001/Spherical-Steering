@@ -661,6 +661,65 @@ $0.3200/0.4926/0.2219$.  These runs established end-to-end functionality but
 are not pooled with the nested-protocol results because their question split
 and tuning procedure differ.
 
+\section{WinoGrande Transfer Experiment}
+
+We additionally evaluate Qwen2.5-3B-Instruct on WinoGrande. Following the
+paper's data protocol, we randomly sample 1,000 questions from the official
+training split with seed 42, use 800 questions for fitting, and reserve 200 for
+development validation. The full official validation split of 1,267 questions
+is used for final accuracy evaluation. Each question has two candidate entity
+fillers, and candidates are ranked by summed conditional token
+log-likelihood.
+
+The matched-token variant constructs exactly the prompt used during
+evaluation, appends each candidate, and extracts hidden positions
+$P-1,\ldots,P+L-2$. Each of the $L$ candidate tokens receives weight $1/L$.
+The staged geometry search again compares three centers, five whitening
+powers, and sixteen rank--shrinkage combinations using only the 200-question
+development-validation subset.
+
+Table~\ref{tab:wino-results} summarizes the observed official-validation
+results. The unsteered baseline is independent of the calibration artifact.
+The earlier spherical and ellipsoidal runs use last-token calibration, whereas
+the final row uses matched scored-token calibration.
+
+\begin{table}[ht]
+\centering
+\caption{Qwen2.5-3B-Instruct WinoGrande official-validation accuracy.}
+\label{tab:wino-results}
+\begin{tabular}{llrr}
+\toprule
+Method & Calibration & Trigger & Accuracy\\
+\midrule
+Unsteered & none & 0.0\% & 57.30\%\\
+Sphere ($\alpha=.9,\beta=-.8$) & last token & 83.5\% & 56.27\%\\
+Ellipsoid ($\alpha=.8,\beta=-.8$) & last token & 89.1\% & \textbf{58.48\%}\\
+Ellipsoid ($\alpha=.3,\beta=-.8$) & matched tokens & 92.4\% & 56.99\%\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The matched-token sweep selected global centering, $p=0.25$, rank 256,
+shrinkage 0.3, $\alpha=0.3$, and $\beta=-0.8$. It reached 66.0\% development-
+validation accuracy with a 91.0\% token-level trigger rate, but fell to 56.99\%
+on the official split while triggering 92.4\% of scored positions. The
+9.01-point accuracy drop despite stable gating indicates validation overfit,
+not a shift in gate frequency. It finished 0.31 points below the unsteered
+baseline and 1.49 points below the earlier last-token ellipsoid.
+
+The last-token ellipsoid improved over the unsteered baseline by 1.18 points
+(approximately 15 additional correct questions), while the fixed spherical
+configuration reduced accuracy by 1.03 points. For context, the paper reports
+50.81\% baseline and 52.72\% spherical accuracy for LLaMA-3.1-8B-Instruct;
+this is not a direct comparison because the model family and size differ.
+Unlike the TruthfulQA result, matched-token calibration therefore did not
+transfer successfully to WinoGrande under this split and search space.
+
+These WinoGrande findings are exploratory. The official split was observed
+before the final matched-token configuration was evaluated, so later runs are
+post-hoc rather than pristine held-out tests. Confirmatory evidence would
+require a new untouched split or a preregistered replication.
+
 \section{Reproducibility Commands}
 
 \begin{lstlisting}[language=bash]
@@ -691,6 +750,24 @@ python sweep_ellipsoid.py \
   --feature-file ./features/Qwen2.5-3B-Instruct_layer19_scored.npz \
   --layer 19 --fold 1 --output-dir ./sweeps/qwen3b_fold1 \
   --kappa 20 --alpha 0.8 --beta -0.8
+\end{lstlisting}
+
+For the matched-token WinoGrande experiment:
+
+\begin{lstlisting}[language=bash]
+cd generic
+python get_activations_generic.py \
+  --model_name Qwen2.5-3B-Instruct --dataset winogrande \
+  --split train --num_samples 1000 --layer 19 \
+  --activation-positions scored --feature-dtype float16 \
+  --seed 42 --save_dir ./features_generic
+
+python sweep_ellipsoid_generic.py \
+  --model-name Qwen2.5-3B-Instruct \
+  --feature-file ./features_generic/Qwen2.5-3B-Instruct_winogrande_train_l19_scored.npz \
+  --layer 19 --stage all \
+  --output-dir ./sweeps_winogrande_geometry \
+  --kappa 20 --alpha 0.3 --beta -0.8
 \end{lstlisting}
 
 \section{Interpretation and Limitations}
