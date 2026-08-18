@@ -228,6 +228,11 @@ grounded covariance fitting, displacement whitening, routed spectral
 suppression, two-pass hook control, cache validation, and synthetic invariant
 tests. It does not modify the TruthfulQA or generic benchmark pipelines.
 
+Its [Qwen2.5-VL COCO/CHAIR pilot](ellipsoid_steering/README.md#qwen25-vl--cocochair-pilot)
+provides a reproducible 100-image fit / 100-image evaluation workflow, matched
+original-versus-blurred activation collection, CHAIR-format caption generation,
+and an official-scorer wrapper.
+
 ## Citation
 
 If you find this work useful, please cite:

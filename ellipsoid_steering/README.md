@@ -71,3 +71,74 @@ pytest -q tests/test_lvlm_*.py
 The tests cover inverse consistency, Mahalanobis-radius preservation, energy
 reduction, beta-zero and mask identities, routing, isotropic geometry, hooks,
 serialization primitives, and a tiny Hugging Face transformer integration.
+
+## Qwen2.5-VL + COCO/CHAIR pilot
+
+Use a deterministic 200-image subset of COCO 2014 validation: 100 images fit
+the geometry and a disjoint 100 images are evaluated once. The prompt is
+`Please describe this image in detail.` and caption decoding is greedy.
+
+Fresh Colab setup and data:
+
+```bash
+git clone https://github.com/niladridutta2001/Spherical-Steering.git
+cd Spherical-Steering
+pip install -U transformers accelerate qwen-vl-utils pycocotools pillow nltk scikit-learn tqdm
+mkdir -p data/coco artifacts results cache
+wget -q https://images.cocodataset.org/zips/val2014.zip -O data/coco/val2014.zip
+wget -q https://images.cocodataset.org/annotations/annotations_trainval2014.zip -O data/coco/annotations.zip
+unzip -q data/coco/val2014.zip -d data/coco
+unzip -q data/coco/annotations.zip -d data/coco
+python scripts/qwen_coco_chair.py make-split \
+  --annotations data/coco/annotations/instances_val2014.json \
+  --output data/coco/chair_100_100_seed42.json \
+  --fit-count 100 --eval-count 100 --seed 42
+```
+
+Collect matched text-token activations and fit the geometry:
+
+```bash
+python scripts/qwen_coco_chair.py collect \
+  --split data/coco/chair_100_100_seed42.json --image-dir data/coco/val2014 \
+  --output-dir cache/qwen25vl3b_coco_fit --layers 19
+python scripts/collect_grounded_stats.py \
+  --activation-chunks 'cache/qwen25vl3b_coco_fit/grounded_*.pt' \
+  --output artifacts/qwen25vl3b_coco_cov.pt \
+  --model-name Qwen/Qwen2.5-VL-3B-Instruct --dataset-name coco2014-chair-fit100 \
+  --target-layers 19 --rank 64 --token-policy text
+python scripts/collect_hallucination_deltas.py \
+  --paired-chunks 'cache/qwen25vl3b_coco_fit/paired_*.pt' \
+  --covariances artifacts/qwen25vl3b_coco_cov.pt \
+  --output-dir cache/qwen25vl3b_coco_deltas --mode aligned
+python scripts/fit_hallucination_modes.py \
+  --delta-chunks 'cache/qwen25vl3b_coco_deltas/*.pt' \
+  --covariances artifacts/qwen25vl3b_coco_cov.pt \
+  --output artifacts/qwen25vl3b_coco_geometry.pt \
+  --num-modes 4 --hallucination-rank 8
+```
+
+Generate baseline and ellipsoid captions on the same held-out images:
+
+```bash
+python scripts/qwen_coco_chair.py generate \
+  --split data/coco/chair_100_100_seed42.json --partition eval \
+  --image-dir data/coco/val2014 --output results/qwen25vl3b_baseline_chair.json
+python scripts/qwen_coco_chair.py generate \
+  --split data/coco/chair_100_100_seed42.json --partition eval \
+  --image-dir data/coco/val2014 --output results/qwen25vl3b_ellipsoid_chair.json \
+  --geometry artifacts/qwen25vl3b_coco_geometry.pt --layers 19
+```
+
+Both files use official CHAIR fields (`image_id`, `caption`). Score them with
+the unmodified official implementation:
+
+```bash
+git clone https://github.com/LisaAnne/Hallucination.git
+python scripts/run_chair.py --captions results/qwen25vl3b_baseline_chair.json \
+  --annotation-dir data/coco/annotations --chair-repo ./Hallucination
+python scripts/run_chair.py --captions results/qwen25vl3b_ellipsoid_chair.json \
+  --annotation-dir data/coco/annotations --chair-repo ./Hallucination
+```
+
+Report CHAIRs and CHAIRi (lower is better), along with the frozen split JSON,
+prompt, decoding settings, layer, and geometry artifact.
