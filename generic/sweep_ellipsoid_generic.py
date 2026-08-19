@@ -128,7 +128,11 @@ def run_stage(stage, args, rows, output, selected_center=None, selected_power=No
         expected = ("answer-conditioned last-token" if args.dataset == "boolq"
                     else "matched scored-token")
         raise ValueError(f"the {args.dataset} sweep requires {expected} features")
-    expected_questions = {"winogrande": 1000, "copa": 400, "boolq": 1000}[args.dataset]
+    expected_questions = {"winogrande": 1000, "copa": 400,
+                          "boolq": 1000}.get(args.dataset,
+                                              metadata["dev_num_samples"])
+    if args.dataset == "storycloze" and expected_questions <= 0:
+        raise ValueError("StoryCloze feature metadata lacks its development size")
     if metadata["dataset"] != args.dataset:
         raise ValueError(f"feature dataset {metadata['dataset']!r} does not match {args.dataset!r}")
     if metadata["dev_num_samples"] != expected_questions or len(np.unique(q)) != expected_questions:
@@ -181,7 +185,7 @@ def run_stage(stage, args, rows, output, selected_center=None, selected_power=No
 
 def main():
     parser = argparse.ArgumentParser(description="Validation-only generic ellipsoid sweep")
-    parser.add_argument("--dataset", choices=("winogrande", "copa", "boolq"),
+    parser.add_argument("--dataset", choices=("winogrande", "copa", "boolq", "storycloze"),
                         default="winogrande")
     parser.add_argument("--model-name", required=True)
     parser.add_argument("--model-dir")

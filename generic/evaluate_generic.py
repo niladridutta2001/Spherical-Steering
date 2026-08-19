@@ -33,7 +33,7 @@ from steering_artifacts import load_steering_artifact, build_intervention
 from utils_generic import (HF_NAMES, MMLU_CATEGORIES, set_seed,
                            format_winogrande_eval_prompt, format_mmlu_eval_prompt,
                            format_copa_eval_prompt, get_mmlu_category_questions)
-from utils_generic import format_boolq_eval_prompt
+from utils_generic import format_boolq_eval_prompt, format_storycloze_eval_prompt
 
 
 # ============================================================
@@ -45,11 +45,7 @@ def format_copa_prompt(premise, question_type, choice1, choice2):
 
 
 def format_storycloze_prompt(sentences, opt1, opt2):
-    story = " ".join(sentences) if isinstance(sentences, list) else sentences
-    return (
-        f"{story}\n\nQuestion: Which ending makes more sense?\n"
-        f"A. {opt1}\nB. {opt2}\nAnswer:"
-    )
+    return format_storycloze_eval_prompt(sentences, opt1, opt2)
 
 
 def format_mmlu_prompt(tokenizer, question, choices):
@@ -152,10 +148,22 @@ def evaluate_copa(model, tokenizer, hook_fn, layer_name, device, steering_stats,
     return correct / total
 
 
-def evaluate_storycloze(model, tokenizer, hook_fn, layer_name, device, steering_stats):
-    """Evaluate on XStoryCloze eval set."""
-    print("Loading XStoryCloze (en) eval set...")
-    dataset = load_dataset("juletxara/xstory_cloze", "en")['eval']
+def evaluate_storycloze(model, tokenizer, hook_fn, layer_name, device,
+                        steering_stats, artifact, eval_split='official'):
+    """Evaluate on development-validation or the untouched official eval set."""
+    if eval_split == 'dev-validation':
+        validation_ids = artifact.get('validation_q_indices')
+        if validation_ids is None or not len(validation_ids):
+            raise ValueError("artifact has no StoryCloze development-validation split")
+        dataset = load_dataset("juletxara/xstory_cloze", "en")["train"]
+        expected = int(artifact.get('dev_num_samples') or -1)
+        if expected != len(dataset):
+            raise ValueError("StoryCloze artifact development size mismatch")
+        dataset = dataset.select([int(value) for value in validation_ids])
+        print(f"Loading {len(dataset)} StoryCloze development-validation examples...")
+    else:
+        print("Loading untouched XStoryCloze (en) eval set...")
+        dataset = load_dataset("juletxara/xstory_cloze", "en")['eval']
     print(f"Evaluating on {len(dataset)} samples...")
 
     correct, total = 0, 0
@@ -355,8 +363,9 @@ def main():
                         default='official', help='development selection or frozen evaluation split')
 
     args = parser.parse_args()
-    if args.eval_split == 'dev-validation' and args.dataset not in ('winogrande', 'mmlu_global', 'copa', 'boolq'):
-        parser.error('--eval-split dev-validation supports WinoGrande, MMLU, COPA, and BoolQ')
+    if args.eval_split == 'dev-validation' and args.dataset not in (
+            'winogrande', 'mmlu_global', 'copa', 'boolq', 'storycloze'):
+        parser.error('--eval-split dev-validation is unsupported for this dataset')
     if args.eval_split == 'evaluation' and args.dataset != 'mmlu_global':
         parser.error('--eval-split evaluation is specific to MMLU')
     set_seed(args.seed)
@@ -391,7 +400,8 @@ def main():
         accuracy = evaluate_copa(model, tokenizer, hook_fn, layer_name, device,
                                  steering_stats, artifact, args.eval_split)
     elif args.dataset == 'storycloze':
-        accuracy = evaluate_storycloze(model, tokenizer, hook_fn, layer_name, device, steering_stats)
+        accuracy = evaluate_storycloze(model, tokenizer, hook_fn, layer_name, device,
+                                       steering_stats, artifact, args.eval_split)
     elif args.dataset == 'mmlu_global':
         accuracy = evaluate_mmlu_global(model, tokenizer, hook_fn, layer_name, device,
                                         steering_stats, artifact, args.eval_split)
@@ -407,7 +417,7 @@ def main():
     print("FINAL RESULTS")
     print("=" * 50)
     print(f"Dataset:    {args.dataset}")
-    if args.dataset in ('winogrande', 'mmlu_global', 'copa', 'boolq'):
+    if args.dataset in ('winogrande', 'mmlu_global', 'copa', 'boolq', 'storycloze'):
         print(f"Eval split: {args.eval_split}")
     print(f"Model:      {args.model_name}")
     print(f"Layer:      {args.layer}")

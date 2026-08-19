@@ -230,6 +230,30 @@ The sweep evaluates only the 200 development-validation examples and prints,
 without executing, the frozen command for all 3,270 official validation
 examples.
 
+### Paper-compatible StoryCloze split
+
+The complete provided English `train` partition is used as development data
+and divided question-wise 4:1 into fitting and validation subsets with seed 42.
+The provided `eval` partition (1,511 examples) remains untouched for final
+evaluation. Both endings are extracted at the candidate-token positions used
+by summed conditional-likelihood scoring.
+
+```bash
+python get_activations_generic.py --model_name Qwen2.5-3B-Instruct \
+  --dataset storycloze --split train --layer 19 \
+  --activation-positions scored --feature-dtype float16 --seed 42 \
+  --save_dir ./features_generic
+
+python sweep_ellipsoid_generic.py --dataset storycloze \
+  --model-name Qwen2.5-3B-Instruct \
+  --feature-file ./features_generic/Qwen2.5-3B-Instruct_storycloze_train_l19_scored.npz \
+  --layer 19 --stage all --output-dir ./sweeps_storycloze_geometry \
+  --kappa 20 --alpha 0.8 --beta -0.8 --resume
+```
+
+The sweep uses only the development-validation subset and prints the frozen
+command for the complete official eval partition without executing it.
+
 Baseline (no steering):
 
 ```bash

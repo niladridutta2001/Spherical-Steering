@@ -88,6 +88,31 @@ def format_boolq_eval_prompt(passage, question):
     return f"Passage: {passage}\nQuestion: {question}\nA:"
 
 
+def format_storycloze_eval_prompt(sentences, option1, option2):
+    """Prompt shared by StoryCloze extraction and evaluation."""
+    story = " ".join(sentences) if isinstance(sentences, list) else sentences
+    return (
+        f"{story}\n\nQuestion: Which ending makes more sense?\n"
+        f"A. {option1}\nB. {option2}\nAnswer:")
+
+
+def get_storycloze_scored_data():
+    """Return evaluation-matched candidates from the provided train split."""
+    dataset = load_dataset("juletxara/xstory_cloze", "en")["train"]
+    prompts, candidates, labels, q_indices, answer_indices = [], [], [], [], []
+    for question_index, item in enumerate(dataset):
+        story = [item[f"input_sentence_{i}"] for i in range(1, 5)]
+        choices = [item["sentence_quiz1"], item["sentence_quiz2"]]
+        correct = int(item["answer_right_ending"]) - 1
+        base = format_storycloze_eval_prompt(story, *choices)
+        for answer_index, choice in enumerate(choices):
+            prompts.append(base); candidates.append(choice)
+            labels.append(int(answer_index == correct)); q_indices.append(question_index)
+            answer_indices.append(answer_index)
+    return (prompts, candidates, np.asarray(labels), np.asarray(q_indices),
+            np.asarray(answer_indices))
+
+
 def get_boolq_scored_data(num_samples=1000, seed=42):
     """Return exact evaluation prompt/candidate pairs from shuffled BoolQ train."""
     dataset = load_dataset("aps/super_glue", "boolq", split="train")

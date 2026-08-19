@@ -411,6 +411,15 @@ zero. The answer-conditioned policy is therefore recorded explicitly in the
 artifact metadata. All geometry and intervention hyperparameters are selected
 exclusively using the 200-example validation subset.
 
+For StoryCloze, the complete provided English training partition forms the
+development pool and is split question-wise in a $4:1$ fitting-to-validation
+ratio using seed 42. The provided evaluation partition of 1,511 examples is
+left untouched for the final evaluation. Both candidate endings are included
+during calibration at the same candidate-token positions used by summed
+conditional log-likelihood scoring. Geometry and steering configuration are
+selected only on the development-validation subset and frozen before the
+official evaluation run.
+
 Each outer fold first assigns approximately half of the 817 questions to an
 untouched test set. Twenty percent of the remaining development half is used
 for validation and the other eighty percent for fitting. Thus the effective

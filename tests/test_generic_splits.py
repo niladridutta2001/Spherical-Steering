@@ -56,3 +56,11 @@ def test_boolq_development_split_is_800_200():
     assert len(fit) == 800
     assert len(validation) == 200
     assert set(fit).isdisjoint(set(validation))
+
+
+def test_storycloze_split_is_four_to_one():
+    q_indices = np.repeat(np.arange(1680), 2)
+    fit, validation = split_development_questions(q_indices, 0.2, 42)
+    assert len(fit) == 1344
+    assert len(validation) == 336
+    assert set(fit).isdisjoint(set(validation))

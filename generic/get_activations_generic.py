@@ -24,7 +24,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from utils_generic import (HF_NAMES, set_seed, get_dataset_data, get_layer_activations,
                            get_winogrande_scored_data, get_mmlu_scored_data,
                            get_copa_scored_data, get_scored_activations)
-from utils_generic import get_boolq_scored_data
+from utils_generic import get_boolq_scored_data, get_storycloze_scored_data
 
 
 def main():
@@ -64,8 +64,10 @@ def main():
 
     # 2. Load Data
     if args.activation_positions == 'scored':
-        if args.split != 'train' or args.dataset not in ('winogrande', 'mmlu_global', 'copa', 'boolq'):
-            raise ValueError('scored extraction supports WinoGrande, MMLU, COPA, or BoolQ train only')
+        if args.split != 'train' or args.dataset not in (
+                'winogrande', 'mmlu_global', 'copa', 'boolq', 'storycloze'):
+            raise ValueError(
+                'scored extraction supports WinoGrande, MMLU, COPA, BoolQ, or StoryCloze train only')
         if args.dataset == 'winogrande':
             n = args.num_samples if args.num_samples is not None else 1000
             prompts, candidates, labels, q_indices, answer_indices = \
@@ -81,10 +83,16 @@ def main():
             prompts, candidates, labels, q_indices, answer_indices = \
                 get_copa_scored_data(args.seed)
             category_indices = None
-        else:
+        elif args.dataset == 'boolq':
             n = args.num_samples if args.num_samples is not None else 1000
             prompts, candidates, labels, q_indices, answer_indices = \
                 get_boolq_scored_data(n, args.seed)
+            category_indices = None
+        else:
+            if args.num_samples is not None:
+                raise ValueError('StoryCloze scored extraction uses the complete train split')
+            prompts, candidates, labels, q_indices, answer_indices = \
+                get_storycloze_scored_data()
             category_indices = None
     else:
         prompts, labels, q_indices = get_dataset_data(
@@ -121,11 +129,7 @@ def main():
     np.savez(save_path, activations=activations, **features,
              dataset=np.array(args.dataset), split=np.array(args.split),
              data_seed=np.array(args.seed),
-             dev_num_samples=np.array(
-                 args.num_samples if args.num_samples is not None else
-                 ((500 if args.dataset == 'mmlu_global' else
-                   400 if args.dataset == 'copa' else 1000)
-                  if args.activation_positions == 'scored' else -1)),
+             dev_num_samples=np.array(len(np.unique(q_indices))),
              activation_positions=np.array(args.activation_positions),
              prompt_format=np.array(
                  'match-evaluation' if args.activation_positions == 'scored' else
