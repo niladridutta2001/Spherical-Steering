@@ -120,12 +120,12 @@ def evaluate_copa(model, tokenizer, hook_fn, layer_name, device, steering_stats,
         if validation_ids is None or not len(validation_ids):
             raise ValueError("artifact has no COPA development-validation split")
         data_seed = int(artifact.get('data_seed') or 42)
-        dataset = load_dataset("super_glue", "copa", split="train").shuffle(seed=data_seed)
+        dataset = load_dataset("aps/super_glue", "copa", split="train").shuffle(seed=data_seed)
         dataset = dataset.select([int(value) for value in validation_ids])
         print(f"Loading {len(dataset)} COPA development-validation examples...")
     else:
         print("Loading untouched COPA validation/test split...")
-        dataset = load_dataset("super_glue", "copa", split="validation")
+        dataset = load_dataset("aps/super_glue", "copa", split="validation")
     print(f"Evaluating on {len(dataset)} samples...")
 
     correct, total = 0, 0
@@ -292,7 +292,7 @@ def evaluate_winogrande(model, tokenizer, hook_fn, layer_name, device,
 def evaluate_boolq(model, tokenizer, hook_fn, layer_name, device, steering_stats):
     """Evaluate on BoolQ validation set. Options: ["no", "yes"]."""
     print("Loading BoolQ validation set...")
-    dataset = load_dataset("super_glue", "boolq", split="validation")
+    dataset = load_dataset("aps/super_glue", "boolq", split="validation")
     print(f"Evaluating on {len(dataset)} samples...")
 
     options = ["no", "yes"]

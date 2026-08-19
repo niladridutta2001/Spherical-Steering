@@ -69,7 +69,7 @@ def format_copa_eval_prompt(premise, question_type, choice1, choice2):
 
 def get_copa_scored_data(seed=42):
     """Return exact evaluation prompt/candidate pairs from shuffled COPA train."""
-    dataset = load_dataset("super_glue", "copa", split="train").shuffle(seed=seed)
+    dataset = load_dataset("aps/super_glue", "copa", split="train").shuffle(seed=seed)
     prompts, candidates, labels, q_indices, answer_indices = [], [], [], [], []
     for question_index, item in enumerate(dataset):
         choices = [item["choice1"], item["choice2"]]
@@ -234,7 +234,7 @@ def get_copa_data(seed=42):
     For each item: correct choice → label=1, incorrect → label=0.
     """
     print(f"Loading COPA for prototype extraction...")
-    dataset = load_dataset("super_glue", "copa", split="train")
+    dataset = load_dataset("aps/super_glue", "copa", split="train")
     dataset = dataset.shuffle(seed=seed)
 
     prompts, labels, q_indices = [], [], []
@@ -412,7 +412,7 @@ def get_boolq_data(num_questions=2000, seed=42):
     Options: ["no", "yes"], label: 0→no, 1→yes.
     """
     print(f"Loading BoolQ for prototype extraction...")
-    dataset = load_dataset("super_glue", "boolq", split="train")
+    dataset = load_dataset("aps/super_glue", "boolq", split="train")
     dataset = dataset.shuffle(seed=seed)
 
     if num_questions is not None:
