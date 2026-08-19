@@ -186,6 +186,22 @@ python evaluate_generic.py --model_name Qwen2.5-3B-Instruct \
 After selection on the 80 examples, replace `dev-validation` with `official`
 for the single final 100-example test run.
 
+Run the complete staged COPA geometry sweep with:
+
+```bash
+python sweep_ellipsoid_generic.py --dataset copa \
+  --model-name Qwen2.5-3B-Instruct \
+  --feature-file ./features_generic/Qwen2.5-3B-Instruct_copa_train_l19_scored.npz \
+  --layer 19 --stage all --output-dir ./sweeps_copa_geometry \
+  --kappa 20 --alpha 0.8 --beta -0.8
+```
+
+It evaluates 24 staged configurations on only the 80 validation examples:
+three centers, five whitening powers, then four ranks
+`{16,32,64,128}` crossed with four shrinkages. The winning artifact and JSON
+summary are saved, and the untouched 100-example command is printed but not
+executed. Use `--resume` after a disconnected runtime.
+
 Baseline (no steering):
 
 ```bash

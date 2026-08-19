@@ -1,4 +1,5 @@
-from generic.sweep_ellipsoid_generic import configurations, config_hash, best_row
+from generic.sweep_ellipsoid_generic import (COPA_RANKS, configurations,
+                                              config_hash, best_row)
 
 
 def test_wino_geometry_sweep_counts_and_dependencies():
@@ -21,3 +22,9 @@ def test_wino_sweep_hash_and_accuracy_selection():
          'trigger_rate': 0.5, 'whitening_power': 0.5},
     ]
     assert best_row(rows, 'power')['whitening_power'] == 0.5
+
+
+def test_copa_covariance_sweep_uses_small_sample_ranks():
+    covariance = configurations('covariance', 'global', 0.375, COPA_RANKS)
+    assert len(covariance) == 16
+    assert sorted({row['rank'] for row in covariance}) == [16, 32, 64, 128]

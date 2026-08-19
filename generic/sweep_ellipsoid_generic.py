@@ -1,4 +1,4 @@
-"""Staged validation-only powered-ellipsoid sweep for WinoGrande."""
+"""Staged validation-only powered-ellipsoid sweep for generic MC tasks."""
 
 import argparse
 import csv
@@ -22,6 +22,7 @@ from generic.get_prototypes_generic import split_development_questions
 CENTERS = ("zero", "global", "class-midpoint")
 POWERS = (0.0, 0.125, 0.25, 0.375, 0.5)
 RANKS = (32, 64, 128, 256)
+COPA_RANKS = (16, 32, 64, 128)
 SHRINKAGES = (0.1, 0.3, 0.5, 0.7)
 FIELDS = ("stage", "config_hash", "center_mode", "whitening_power", "rank",
           "shrinkage", "accuracy", "trigger_rate", "status", "artifact_path")
@@ -32,7 +33,7 @@ def config_hash(value):
     return hashlib.sha256(encoded).hexdigest()[:12]
 
 
-def configurations(stage, center=None, power=None):
+def configurations(stage, center=None, power=None, ranks=RANKS):
     if stage == "center":
         return [dict(center_mode=c, whitening_power=0.5, rank=128, shrinkage=0.1)
                 for c in CENTERS]
@@ -44,7 +45,7 @@ def configurations(stage, center=None, power=None):
     if power is None:
         raise ValueError("covariance stage requires a selected whitening power")
     return [dict(center_mode=center, whitening_power=power, rank=r, shrinkage=s)
-            for r in RANKS for s in SHRINKAGES]
+            for r in ranks for s in SHRINKAGES]
 
 
 def best_row(rows, stage):
@@ -74,7 +75,7 @@ def save_artifact(path, geometry, cfg, args, fit_qs, validation_qs, metadata, h)
         shrinkage=np.array(cfg["shrinkage"], dtype=np.float32),
         variance_floor=np.array(args.variance_floor, dtype=np.float32),
         cov_rank=np.array(cfg["rank"]), train_q_indices=fit_qs,
-        validation_q_indices=validation_qs, dataset=np.array("winogrande"),
+        validation_q_indices=validation_qs, dataset=np.array(args.dataset),
         data_seed=np.array(metadata["data_seed"]),
         dev_num_samples=np.array(metadata["dev_num_samples"]),
         split_seed=np.array(args.split_seed), validation_fraction=np.array(0.2),
@@ -88,7 +89,7 @@ def save_artifact(path, geometry, cfg, args, fit_qs, validation_qs, metadata, h)
 
 def evaluate(artifact, args):
     command = [sys.executable, "evaluate_generic.py", "--model_name", args.model_name,
-               "--dataset", "winogrande", "--eval-split", "dev-validation",
+               "--dataset", args.dataset, "--eval-split", "dev-validation",
                "--layer", str(args.layer), "--prototype_path", str(artifact),
                "--steering-geometry", "ellipsoid", "--kappa", str(args.kappa),
                "--alpha", str(args.alpha), "--beta", str(args.beta)]
@@ -111,18 +112,25 @@ def run_stage(stage, args, rows, output, selected_center=None, selected_power=No
         q = np.asarray(data["q_indices"])
         weights = np.asarray(data["sample_weights"]) if "sample_weights" in data else np.ones(len(X))
         metadata = {
+            "dataset": str(data["dataset"].item()) if "dataset" in data else "",
             "data_seed": int(data["data_seed"].item()) if "data_seed" in data else 42,
             "dev_num_samples": int(data["dev_num_samples"].item()) if "dev_num_samples" in data else -1,
             "activation_positions": str(data["activation_positions"].item()) if "activation_positions" in data else "last",
             "prompt_format": str(data["prompt_format"].item()) if "prompt_format" in data else "legacy"}
     if metadata["activation_positions"] != "scored" or metadata["prompt_format"] != "match-evaluation":
         raise ValueError("the sweep requires matched scored-token features")
-    if metadata["dev_num_samples"] != 1000 or len(np.unique(q)) != 1000:
-        raise ValueError("paper-compatible WinoGrande sweep requires exactly 1,000 development questions")
+    expected_questions = {"winogrande": 1000, "copa": 400}[args.dataset]
+    if metadata["dataset"] != args.dataset:
+        raise ValueError(f"feature dataset {metadata['dataset']!r} does not match {args.dataset!r}")
+    if metadata["dev_num_samples"] != expected_questions or len(np.unique(q)) != expected_questions:
+        raise ValueError(
+            f"paper-compatible {args.dataset} sweep requires exactly "
+            f"{expected_questions} development questions")
 
     fit_qs, validation_qs = split_development_questions(q, 0.2, args.split_seed)
     mask = np.isin(q, fit_qs)
-    configs = configurations(stage, selected_center, selected_power)
+    ranks = COPA_RANKS if args.dataset == "copa" else RANKS
+    configs = configurations(stage, selected_center, selected_power, ranks)
     max_rank = min(max(c["rank"] for c in configs), X.shape[1]-1, int(mask.sum())-1)
     raw = fit_raw_spectral(X[mask], y[mask], weights[mask], args.covariance_source,
                            configs[0]["center_mode"], max_rank, args.seed)
@@ -133,7 +141,8 @@ def run_stage(stage, args, rows, output, selected_center=None, selected_power=No
 
     completed = {r.get("config_hash") for r in rows if r.get("status") == "complete"}
     for cfg in configs:
-        base = dict(stage=stage, feature_file=str(args.feature_file), layer=args.layer,
+        base = dict(stage=stage, dataset=args.dataset,
+                    feature_file=str(args.feature_file), layer=args.layer,
                     covariance_source=args.covariance_source, variance_floor=args.variance_floor,
                     kappa=args.kappa, alpha=args.alpha, beta=args.beta,
                     question_hash=question_hash, **cfg)
@@ -162,7 +171,8 @@ def run_stage(stage, args, rows, output, selected_center=None, selected_power=No
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Validation-only WinoGrande ellipsoid sweep")
+    parser = argparse.ArgumentParser(description="Validation-only generic ellipsoid sweep")
+    parser.add_argument("--dataset", choices=("winogrande", "copa"), default="winogrande")
     parser.add_argument("--model-name", required=True)
     parser.add_argument("--model-dir")
     parser.add_argument("--feature-file", required=True)
@@ -194,11 +204,11 @@ def main():
     write_summary(rows, output)
     winner = best_row(rows, stages[-1])
     if winner:
-        best_path = output / "best_winogrande_ellipsoid.json"
+        best_path = output / f"best_{args.dataset}_ellipsoid.json"
         best_path.write_text(json.dumps(winner, indent=2))
         print("BEST", json.dumps(winner, indent=2))
         print("FROZEN OFFICIAL COMMAND (not executed):")
-        print(f"python evaluate_generic.py --model_name {args.model_name} --dataset winogrande "
+        print(f"python evaluate_generic.py --model_name {args.model_name} --dataset {args.dataset} "
               f"--eval-split official --layer {args.layer} --prototype_path {winner['artifact_path']} "
               f"--steering-geometry ellipsoid --kappa {args.kappa} --alpha {args.alpha} --beta {args.beta}")
 
