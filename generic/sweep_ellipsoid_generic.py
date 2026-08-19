@@ -117,8 +117,17 @@ def run_stage(stage, args, rows, output, selected_center=None, selected_power=No
             "dev_num_samples": int(data["dev_num_samples"].item()) if "dev_num_samples" in data else -1,
             "activation_positions": str(data["activation_positions"].item()) if "activation_positions" in data else "last",
             "prompt_format": str(data["prompt_format"].item()) if "prompt_format" in data else "legacy"}
-    if metadata["activation_positions"] != "scored" or metadata["prompt_format"] != "match-evaluation":
-        raise ValueError("the sweep requires matched scored-token features")
+    valid_policy = (
+        metadata["activation_positions"] == "scored" and
+        metadata["prompt_format"] == "match-evaluation")
+    if args.dataset == "boolq":
+        valid_policy = (
+            metadata["activation_positions"] == "last" and
+            metadata["prompt_format"] == "answer-conditioned")
+    if not valid_policy:
+        expected = ("answer-conditioned last-token" if args.dataset == "boolq"
+                    else "matched scored-token")
+        raise ValueError(f"the {args.dataset} sweep requires {expected} features")
     expected_questions = {"winogrande": 1000, "copa": 400, "boolq": 1000}[args.dataset]
     if metadata["dataset"] != args.dataset:
         raise ValueError(f"feature dataset {metadata['dataset']!r} does not match {args.dataset!r}")

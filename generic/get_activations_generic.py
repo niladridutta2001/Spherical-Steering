@@ -127,7 +127,9 @@ def main():
                    400 if args.dataset == 'copa' else 1000)
                   if args.activation_positions == 'scored' else -1)),
              activation_positions=np.array(args.activation_positions),
-             prompt_format=np.array('match-evaluation' if args.activation_positions == 'scored' else 'legacy'),
+             prompt_format=np.array(
+                 'match-evaluation' if args.activation_positions == 'scored' else
+                 'answer-conditioned' if args.dataset == 'boolq' else 'legacy'),
              feature_dtype=np.array(args.feature_dtype))
     print(f"Saved to {save_path}")
 
