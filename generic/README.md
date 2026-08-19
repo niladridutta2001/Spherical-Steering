@@ -120,6 +120,72 @@ combinations on only the 200-question development-validation subset. It saves
 JSON/CSV summaries, supports `--resume`, and prints without executing the
 frozen command for all 1,267 official validation questions.
 
+### Category-balanced MMLU protocol
+
+MMLU subjects are grouped into STEM, Humanities, Social Sciences, and Other.
+For each category, the deterministically shuffled official test questions are
+partitioned as follows: the first 500 form development data, split into 400 fit
+and 100 validation questions; the next 200 are frozen evaluation questions.
+Thus fitting uses 1,600 questions, validation uses 400, and final evaluation
+uses 800. Candidate activations are extracted at exactly the token positions
+whose conditional log-likelihoods are used during evaluation.
+
+```bash
+python get_activations_generic.py --model_name Qwen2.5-3B-Instruct \
+  --dataset mmlu_global --split train --num_samples 500 --layer 19 \
+  --activation-positions scored --feature-dtype float16 --seed 42 \
+  --save_dir ./features_generic
+
+python get_prototypes_generic.py \
+  --feature_file ./features_generic/Qwen2.5-3B-Instruct_mmlu_global_train_l19_scored.npz \
+  --save_dir ./prototypes_generic --geometry ellipsoid-lowrank \
+  --covariance-source pooled --center-mode class-midpoint \
+  --whitening-power 0.25 --cov-rank 64 --shrinkage 0.1 \
+  --validation-fraction 0.2 --split-seed 42
+```
+
+Tune only on the balanced 400-question validation set:
+
+```bash
+python evaluate_generic.py --model_name Qwen2.5-3B-Instruct \
+  --dataset mmlu_global --eval-split dev-validation --layer 19 \
+  --prototype_path ./prototypes_generic/Qwen2.5-3B-Instruct_mmlu_global_train_l19_scored_proto.npz \
+  --steering-geometry ellipsoid --kappa 20 --alpha 0.8 --beta -0.8
+```
+
+After freezing all settings, replace `dev-validation` with `evaluation` to run
+once on the disjoint 800-question evaluation set. The evaluator prints the
+four category accuracies and their balanced micro-average.
+
+### Paper-compatible COPA split
+
+The 400 examples in the official COPA training split are shuffled with seed 42
+and divided question-wise into 320 fitting and 80 development-validation
+examples. The official 100-example validation split remains untouched and is
+used as the final test set. Both candidates are calibrated at the exact token
+positions used by conditional-likelihood evaluation.
+
+```bash
+python get_activations_generic.py --model_name Qwen2.5-3B-Instruct \
+  --dataset copa --split train --layer 19 --activation-positions scored \
+  --feature-dtype float16 --seed 42 --save_dir ./features_generic
+
+python get_prototypes_generic.py \
+  --feature_file ./features_generic/Qwen2.5-3B-Instruct_copa_train_l19_scored.npz \
+  --save_dir ./prototypes_generic --geometry ellipsoid-lowrank \
+  --covariance-source pooled --center-mode class-midpoint \
+  --whitening-power 0.25 --cov-rank 64 --shrinkage 0.1 \
+  --validation-fraction 0.2 --split-seed 42
+
+python evaluate_generic.py --model_name Qwen2.5-3B-Instruct \
+  --dataset copa --eval-split dev-validation --layer 19 \
+  --prototype_path ./prototypes_generic/Qwen2.5-3B-Instruct_copa_train_l19_scored_proto.npz \
+  --steering-geometry ellipsoid --kappa 20 --alpha 0.8 --beta -0.8
+```
+
+After selection on the 80 examples, replace `dev-validation` with `official`
+for the single final 100-example test run.
+
 Baseline (no steering):
 
 ```bash

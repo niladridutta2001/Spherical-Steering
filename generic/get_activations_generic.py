@@ -22,7 +22,8 @@ import os
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from utils_generic import (HF_NAMES, set_seed, get_dataset_data, get_layer_activations,
-                           get_winogrande_scored_data, get_scored_activations)
+                           get_winogrande_scored_data, get_mmlu_scored_data,
+                           get_copa_scored_data, get_scored_activations)
 
 
 def main():
@@ -62,11 +63,23 @@ def main():
 
     # 2. Load Data
     if args.activation_positions == 'scored':
-        if args.dataset != 'winogrande' or args.split != 'train':
-            raise ValueError('scored extraction currently supports WinoGrande train only')
-        n = args.num_samples if args.num_samples is not None else 1000
-        prompts, candidates, labels, q_indices, answer_indices = \
-            get_winogrande_scored_data(n, args.seed)
+        if args.split != 'train' or args.dataset not in ('winogrande', 'mmlu_global', 'copa'):
+            raise ValueError('scored extraction supports WinoGrande, MMLU, or COPA train only')
+        if args.dataset == 'winogrande':
+            n = args.num_samples if args.num_samples is not None else 1000
+            prompts, candidates, labels, q_indices, answer_indices = \
+                get_winogrande_scored_data(n, args.seed)
+            category_indices = None
+        elif args.dataset == 'mmlu_global':
+            n = args.num_samples if args.num_samples is not None else 500
+            (prompts, candidates, labels, q_indices, answer_indices,
+             category_indices) = get_mmlu_scored_data(tokenizer, args.seed, n)
+        else:
+            if args.num_samples not in (None, 400):
+                raise ValueError('COPA scored extraction uses all 400 training questions')
+            prompts, candidates, labels, q_indices, answer_indices = \
+                get_copa_scored_data(args.seed)
+            category_indices = None
     else:
         prompts, labels, q_indices = get_dataset_data(
             args.dataset, split=args.split, num_samples=args.num_samples,
@@ -83,6 +96,10 @@ def main():
             model, tokenizer, prompts, candidates, labels, q_indices,
             answer_indices, args.layer, device, args.feature_dtype)
         activations = features.pop('activations')
+        if category_indices is not None:
+            question_categories = dict(zip(q_indices.tolist(), category_indices.tolist()))
+            features['category_indices'] = np.asarray(
+                [question_categories[int(q)] for q in features['q_indices']])
     else:
         activations = get_layer_activations(model, tokenizer, prompts, args.layer, device)
         if args.feature_dtype == 'float16':
@@ -100,7 +117,9 @@ def main():
              data_seed=np.array(args.seed),
              dev_num_samples=np.array(
                  args.num_samples if args.num_samples is not None else
-                 (1000 if args.activation_positions == 'scored' else -1)),
+                 ((500 if args.dataset == 'mmlu_global' else
+                   400 if args.dataset == 'copa' else 1000)
+                  if args.activation_positions == 'scored' else -1)),
              activation_positions=np.array(args.activation_positions),
              prompt_format=np.array('match-evaluation' if args.activation_positions == 'scored' else 'legacy'),
              feature_dtype=np.array(args.feature_dtype))

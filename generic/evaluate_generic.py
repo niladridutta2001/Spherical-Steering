@@ -31,7 +31,8 @@ from baukit import TraceDict
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from steering_artifacts import load_steering_artifact, build_intervention
 from utils_generic import (HF_NAMES, MMLU_CATEGORIES, set_seed,
-                           format_winogrande_eval_prompt)
+                           format_winogrande_eval_prompt, format_mmlu_eval_prompt,
+                           format_copa_eval_prompt, get_mmlu_category_questions)
 
 
 # ============================================================
@@ -39,11 +40,7 @@ from utils_generic import (HF_NAMES, MMLU_CATEGORIES, set_seed,
 # ============================================================
 
 def format_copa_prompt(premise, question_type, choice1, choice2):
-    return (
-        f"Question:\n{premise} Based on the previous passage, "
-        f"choose the most reasonable {question_type}.\n"
-        f"A: {choice1}\nB: {choice2}\n\nAnswer:"
-    )
+    return format_copa_eval_prompt(premise, question_type, choice1, choice2)
 
 
 def format_storycloze_prompt(sentences, opt1, opt2):
@@ -56,21 +53,7 @@ def format_storycloze_prompt(sentences, opt1, opt2):
 
 def format_mmlu_prompt(tokenizer, question, choices):
     """Format MMLU prompt using chat template (for Instruct models)."""
-    user_content = (
-        "You are solving a multiple-choice question.\n\n"
-        "Choose the correct option AND output the option text EXACTLY as written.\n"
-        "Rules:\n"
-        "- Output must be a verbatim copy of ONE option's text.\n"
-        "- Do NOT output the option letter (A/B/C/D).\n"
-        "- Do NOT add explanations, punctuation, or extra words.\n"
-        "- Do NOT paraphrase. Copy the option text exactly.\n\n"
-        f"Question: {question}\n"
-        "Options:\n"
-        f"A) {choices[0]}\nB) {choices[1]}\nC) {choices[2]}\nD) {choices[3]}\n\n"
-        "Final answer (verbatim option text only):"
-    )
-    messages = [{"role": "user", "content": user_content}]
-    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    return format_mmlu_eval_prompt(tokenizer, question, choices)
 
 
 def format_winogrande_prompt(sentence, option1, option2):
@@ -129,10 +112,20 @@ def calculate_option_score(model, tokenizer, base_prompt, option_text,
 # Per-dataset Evaluation Functions
 # ============================================================
 
-def evaluate_copa(model, tokenizer, hook_fn, layer_name, device, steering_stats):
-    """Evaluate on COPA validation set (100 samples)."""
-    print("Loading COPA validation set...")
-    dataset = load_dataset("super_glue", "copa", split="validation")
+def evaluate_copa(model, tokenizer, hook_fn, layer_name, device, steering_stats,
+                  artifact, eval_split='official'):
+    """Evaluate on 80 development-validation or 100 untouched test examples."""
+    if eval_split == 'dev-validation':
+        validation_ids = artifact.get('validation_q_indices')
+        if validation_ids is None or not len(validation_ids):
+            raise ValueError("artifact has no COPA development-validation split")
+        data_seed = int(artifact.get('data_seed') or 42)
+        dataset = load_dataset("super_glue", "copa", split="train").shuffle(seed=data_seed)
+        dataset = dataset.select([int(value) for value in validation_ids])
+        print(f"Loading {len(dataset)} COPA development-validation examples...")
+    else:
+        print("Loading untouched COPA validation/test split...")
+        dataset = load_dataset("super_glue", "copa", split="validation")
     print(f"Evaluating on {len(dataset)} samples...")
 
     correct, total = 0, 0
@@ -188,6 +181,7 @@ def evaluate_storycloze(model, tokenizer, hook_fn, layer_name, device, steering_
 def _evaluate_mmlu_items(model, tokenizer, hook_fn, layer_name, device, items, steering_stats):
     """Shared evaluation loop for MMLU items."""
     correct, total = 0, 0
+    category_counts = {}
     pbar = tqdm(items)
 
     for item in pbar:
@@ -199,47 +193,55 @@ def _evaluate_mmlu_items(model, tokenizer, hook_fn, layer_name, device, items, s
         scores = [calculate_option_score(model, tokenizer, base_prompt, c,
                                          hook_fn, layer_name, device) for c in choices]
 
-        if np.argmax(scores) == correct_idx:
+        is_correct = int(np.argmax(scores) == correct_idx)
+        if is_correct:
             correct += 1
+        category = item.get('_category', 'Unknown')
+        cat_correct, cat_total = category_counts.get(category, (0, 0))
+        category_counts[category] = (cat_correct + is_correct, cat_total + 1)
         total += 1
         pbar.set_description(f"Acc: {correct/total:.4f}")
 
+    for category, (cat_correct, cat_total) in category_counts.items():
+        print(f"  {category}: {cat_correct / cat_total:.4f} ({cat_correct}/{cat_total})")
     return correct / total
 
 
 def evaluate_mmlu_global(model, tokenizer, hook_fn, layer_name, device,
-                         steering_stats, eval_split='test'):
+                         steering_stats, artifact, eval_split='evaluation'):
     """
-    Evaluate on MMLU Global Balanced (all 4 categories, 500/cat test).
-    Returns micro-average accuracy across ~2000 samples.
+    Development validation uses 100/category from the 500/category development
+    pool. Evaluation uses the next disjoint 200/category.
     """
     print(f"Loading MMLU Global Balanced (split={eval_split})...")
 
+    data_seed = int(artifact.get('data_seed') or 42)
     all_items = []
-    for cat_name, subsets in MMLU_CATEGORIES.items():
-        loaded = []
-        for sub in subsets:
-            try:
-                loaded.append(load_dataset("cais/mmlu", sub, split='test'))
-            except:
-                pass
-        if not loaded:
-            continue
-
-        cat_dataset = concatenate_datasets(loaded).shuffle(seed=42)
-        total = len(cat_dataset)
-
-        if eval_split == 'test':
-            start_idx, end_idx = 500, min(1000, total)
-        else:
-            raise ValueError(f"Use eval_split='test' for mmlu_global evaluation")
-
-        if start_idx >= total:
-            continue
-
-        dataset = cat_dataset.select(range(start_idx, end_idx))
-        print(f"  {cat_name}: {len(dataset)} questions")
-        all_items.extend(list(dataset))
+    if eval_split == 'dev-validation':
+        validation_ids = artifact.get('validation_q_indices')
+        if validation_ids is None or not len(validation_ids):
+            raise ValueError("artifact has no development-validation split")
+        selected_ids = {int(value) for value in validation_ids}
+        by_category = get_mmlu_category_questions(data_seed, start=0, count=500)
+        global_question = 0
+        for _, (category_name, dataset) in by_category.items():
+            selected = []
+            for item in dataset:
+                if global_question in selected_ids:
+                    row = dict(item); row['_category'] = category_name; selected.append(row)
+                global_question += 1
+            print(f"  {category_name}: {len(selected)} validation questions")
+            all_items.extend(selected)
+    elif eval_split in ('evaluation', 'official'):
+        by_category = get_mmlu_category_questions(data_seed, start=500, count=200)
+        for _, (category_name, dataset) in by_category.items():
+            rows = []
+            for item in dataset:
+                row = dict(item); row['_category'] = category_name; rows.append(row)
+            print(f"  {category_name}: {len(rows)} evaluation questions")
+            all_items.extend(rows)
+    else:
+        raise ValueError("MMLU eval split must be dev-validation or evaluation")
 
     print(f"Total: {len(all_items)} questions")
     return _evaluate_mmlu_items(model, tokenizer, hook_fn, layer_name, device,
@@ -334,12 +336,14 @@ def main():
                         help="Local model directory (overrides model_name)")
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--steering-geometry', choices=['auto', 'sphere', 'ellipsoid'], default='auto')
-    parser.add_argument('--eval-split', choices=['official', 'dev-validation'], default='official',
-                        help='WinoGrande selection split or final official validation set')
+    parser.add_argument('--eval-split', choices=['official', 'dev-validation', 'evaluation'],
+                        default='official', help='development selection or frozen evaluation split')
 
     args = parser.parse_args()
-    if args.eval_split == 'dev-validation' and args.dataset != 'winogrande':
-        parser.error('--eval-split dev-validation is currently supported only for winogrande')
+    if args.eval_split == 'dev-validation' and args.dataset not in ('winogrande', 'mmlu_global', 'copa'):
+        parser.error('--eval-split dev-validation supports WinoGrande, MMLU, and COPA')
+    if args.eval_split == 'evaluation' and args.dataset != 'mmlu_global':
+        parser.error('--eval-split evaluation is specific to MMLU')
     set_seed(args.seed)
 
     # Load model
@@ -369,11 +373,13 @@ def main():
 
     # Dispatch evaluation
     if args.dataset == 'copa':
-        accuracy = evaluate_copa(model, tokenizer, hook_fn, layer_name, device, steering_stats)
+        accuracy = evaluate_copa(model, tokenizer, hook_fn, layer_name, device,
+                                 steering_stats, artifact, args.eval_split)
     elif args.dataset == 'storycloze':
         accuracy = evaluate_storycloze(model, tokenizer, hook_fn, layer_name, device, steering_stats)
     elif args.dataset == 'mmlu_global':
-        accuracy = evaluate_mmlu_global(model, tokenizer, hook_fn, layer_name, device, steering_stats)
+        accuracy = evaluate_mmlu_global(model, tokenizer, hook_fn, layer_name, device,
+                                        steering_stats, artifact, args.eval_split)
     elif args.dataset == 'winogrande':
         accuracy = evaluate_winogrande(model, tokenizer, hook_fn, layer_name, device,
                                        steering_stats, artifact, args.eval_split)
@@ -387,7 +393,7 @@ def main():
     print("FINAL RESULTS")
     print("=" * 50)
     print(f"Dataset:    {args.dataset}")
-    if args.dataset == 'winogrande':
+    if args.dataset in ('winogrande', 'mmlu_global', 'copa'):
         print(f"Eval split: {args.eval_split}")
     print(f"Model:      {args.model_name}")
     print(f"Layer:      {args.layer}")

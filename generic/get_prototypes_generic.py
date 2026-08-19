@@ -31,6 +31,26 @@ def split_development_questions(q_indices, validation_fraction=0.2, seed=42):
     return np.sort(fit_qs), np.sort(validation_qs)
 
 
+def split_development_questions_stratified(q_indices, category_indices,
+                                           validation_fraction=0.2, seed=42):
+    """Split question IDs independently within every MMLU category."""
+    q_indices, category_indices = np.asarray(q_indices), np.asarray(category_indices)
+    question_categories = {}
+    for question in np.unique(q_indices):
+        values = np.unique(category_indices[q_indices == question])
+        if len(values) != 1:
+            raise ValueError("each question must belong to exactly one category")
+        question_categories[question] = values[0]
+    fit, validation = [], []
+    for category in sorted(set(question_categories.values())):
+        questions = np.asarray([q for q, value in question_categories.items()
+                                if value == category])
+        cat_fit, cat_validation = train_test_split(
+            questions, test_size=validation_fraction, random_state=seed, shuffle=True)
+        fit.extend(cat_fit); validation.extend(cat_validation)
+    return np.sort(np.asarray(fit)), np.sort(np.asarray(validation))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Step 2: Compute contrastive prototypes")
     parser.add_argument('--feature_file', type=str, required=True, help="Path to feature .npz file")
@@ -56,8 +76,13 @@ def main():
     print(f"Loaded {len(X)} samples ({sum(y)} correct, {len(y)-sum(y)} incorrect), dim={X.shape[1]}")
 
     if args.validation_fraction:
-        fit_qs, validation_qs = split_development_questions(
-            q_indices, args.validation_fraction, args.split_seed)
+        if 'category_indices' in data:
+            fit_qs, validation_qs = split_development_questions_stratified(
+                q_indices, data['category_indices'], args.validation_fraction,
+                args.split_seed)
+        else:
+            fit_qs, validation_qs = split_development_questions(
+                q_indices, args.validation_fraction, args.split_seed)
         fit_mask = np.isin(q_indices, fit_qs)
     else:
         fit_qs, validation_qs = np.unique(q_indices), np.array([], dtype=q_indices.dtype)

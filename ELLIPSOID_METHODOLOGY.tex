@@ -375,6 +375,30 @@ score is selected and benchmark accuracy is reported. Those benchmarks are
 outside the present TruthfulQA experiment and should not be inferred from the
 MC1/MC2/MC3 results.
 
+For the MMLU experiment, the 57 subjects are grouped into STEM, Humanities,
+Social Sciences, and Other.  Within each category, a deterministic shuffle
+with seed 42 assigns the first 500 questions to development and the next 200
+questions to frozen evaluation.  The 500 development questions are split
+independently within category in an $80:20$ ratio, yielding 400 fitting and
+100 validation questions per category.  Consequently, the balanced aggregate
+contains 1,600 fitting, 400 validation, and 800 evaluation questions.  All
+four candidate answers are represented during geometry fitting.  Activations
+are collected at exactly the candidate-token positions whose summed
+conditional log-likelihood determines the multiple-choice prediction, with
+each answer receiving unit total weight irrespective of token length.  Center,
+covariance, rank, whitening power, and steering hyperparameters are selected
+only on the 400-question validation set; category and aggregate accuracies are
+reported once on the disjoint 800-question evaluation set.
+
+For COPA, the official 400-example training split is shuffled with seed 42 and
+divided question-wise in a $4:1$ ratio: 320 examples fit the geometry and 80
+form development validation.  The separate official 100-example validation
+split is not consulted during fitting or selection and serves as the final test
+set.  Each premise contributes its two candidate alternatives, and calibration
+uses the same candidate-token activations whose summed conditional
+log-likelihood determines test accuracy.  Geometry and steering settings are
+frozen after validation before the single 100-example test evaluation.
+
 Each outer fold first assigns approximately half of the 817 questions to an
 untouched test set. Twenty percent of the remaining development half is used
 for validation and the other eighty percent for fitting. Thus the effective

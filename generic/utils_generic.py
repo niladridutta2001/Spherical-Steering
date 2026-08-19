@@ -41,6 +41,48 @@ def format_winogrande_eval_prompt(sentence, option1, option2):
             f"1) {option1}\n2) {option2}\nA:")
 
 
+def format_mmlu_eval_prompt(tokenizer, question, choices):
+    """Prompt shared by MMLU matched-token extraction and evaluation."""
+    user_content = (
+        "You are solving a multiple-choice question.\n\n"
+        "Choose the correct option AND output the option text EXACTLY as written.\n"
+        "Rules:\n"
+        "- Output must be a verbatim copy of ONE option's text.\n"
+        "- Do NOT output the option letter (A/B/C/D).\n"
+        "- Do NOT add explanations, punctuation, or extra words.\n"
+        "- Do NOT paraphrase. Copy the option text exactly.\n\n"
+        f"Question: {question}\nOptions:\n"
+        f"A) {choices[0]}\nB) {choices[1]}\nC) {choices[2]}\nD) {choices[3]}\n\n"
+        "Final answer (verbatim option text only):")
+    return tokenizer.apply_chat_template(
+        [{"role": "user", "content": user_content}], tokenize=False,
+        add_generation_prompt=True)
+
+
+def format_copa_eval_prompt(premise, question_type, choice1, choice2):
+    """Prompt shared by COPA matched-token extraction and evaluation."""
+    return (
+        f"Question:\n{premise} Based on the previous passage, "
+        f"choose the most reasonable {question_type}.\n"
+        f"A: {choice1}\nB: {choice2}\n\nAnswer:")
+
+
+def get_copa_scored_data(seed=42):
+    """Return exact evaluation prompt/candidate pairs from shuffled COPA train."""
+    dataset = load_dataset("super_glue", "copa", split="train").shuffle(seed=seed)
+    prompts, candidates, labels, q_indices, answer_indices = [], [], [], [], []
+    for question_index, item in enumerate(dataset):
+        choices = [item["choice1"], item["choice2"]]
+        base = format_copa_eval_prompt(
+            item["premise"], item["question"], *choices)
+        for answer_index, choice in enumerate(choices):
+            prompts.append(base); candidates.append(choice)
+            labels.append(int(answer_index == int(item["label"])))
+            q_indices.append(question_index); answer_indices.append(answer_index)
+    return (prompts, candidates, np.asarray(labels), np.asarray(q_indices),
+            np.asarray(answer_indices))
+
+
 def get_winogrande_scored_data(num_samples=1000, seed=42):
     """Return exact evaluation prompt/candidate pairs from shuffled train data."""
     dataset = load_dataset("allenai/winogrande", "winogrande_xl")['train']
@@ -70,7 +112,8 @@ def get_scored_activations(model, tokenizer, base_prompts, candidates, labels,
                 rows, total=len(base_prompts), desc='Extracting scored features'):
             prompt_ids = tokenizer(base, add_special_tokens=False,
                                    return_tensors='pt').input_ids.to(device)
-            option_ids = tokenizer(' ' + candidate, add_special_tokens=False,
+            text_to_append = (' ' + candidate if base.strip().endswith(':') else candidate)
+            option_ids = tokenizer(text_to_append, add_special_tokens=False,
                                    return_tensors='pt').input_ids.to(device)
             input_ids = torch.cat((prompt_ids, option_ids), dim=1)
             start = prompt_ids.shape[1] - 1
@@ -122,6 +165,50 @@ MMLU_CATEGORIES = {
         "virology"
     ]
 }
+
+
+def get_mmlu_category_questions(seed=42, start=0, count=500):
+    """Load a deterministic, category-balanced slice of MMLU test questions."""
+    by_category = {}
+    for category_id, (category_name, subsets) in enumerate(MMLU_CATEGORIES.items()):
+        loaded = []
+        for subset in subsets:
+            try:
+                loaded.append(load_dataset("cais/mmlu", subset, split="test"))
+            except Exception as error:
+                print(f"  Warning: Failed to load {subset}: {error}")
+        if not loaded:
+            raise RuntimeError(f"no MMLU subjects loaded for {category_name}")
+        dataset = concatenate_datasets(loaded).shuffle(seed=seed)
+        if start + count > len(dataset):
+            raise ValueError(
+                f"{category_name} has {len(dataset)} questions; cannot select "
+                f"indices [{start}, {start + count})")
+        by_category[category_id] = (category_name,
+                                    dataset.select(range(start, start + count)))
+    return by_category
+
+
+def get_mmlu_scored_data(tokenizer, seed=42, questions_per_category=500):
+    """Return evaluation-matched candidate strings for MMLU development data."""
+    prompts, candidates, labels = [], [], []
+    q_indices, answer_indices, category_indices = [], [], []
+    global_question = 0
+    for category_id, (category_name, dataset) in get_mmlu_category_questions(
+            seed, start=0, count=questions_per_category).items():
+        print(f"  {category_name}: {len(dataset)} development questions")
+        for item in dataset:
+            choices = list(item["choices"])
+            correct = int(item["answer"])
+            base = format_mmlu_eval_prompt(tokenizer, item["question"], choices)
+            for answer_index, choice in enumerate(choices):
+                prompts.append(base); candidates.append(choice)
+                labels.append(int(answer_index == correct))
+                q_indices.append(global_question); answer_indices.append(answer_index)
+                category_indices.append(category_id)
+            global_question += 1
+    return (prompts, candidates, np.asarray(labels), np.asarray(q_indices),
+            np.asarray(answer_indices), np.asarray(category_indices))
 
 
 # ==================== Prompt Formatting ====================
@@ -221,7 +308,7 @@ def get_mmlu_global_data(split='train', seed=42):
 
     Split strategy (per category):
       - train: indices 0-500   (500/cat, 2000 total)
-      - test:  indices 500-1000 (500/cat, 2000 total)
+      - test:  indices 500-700 (200/cat, 800 total)
 
     Creates a single balanced dataset for computing ONE global prototype
     and ONE micro-average accuracy across all of MMLU.
@@ -247,7 +334,7 @@ def get_mmlu_global_data(split='train', seed=42):
         if split == 'train':
             start_idx, end_idx = 0, min(500, total)
         elif split == 'test':
-            start_idx, end_idx = 500, min(1000, total)
+            start_idx, end_idx = 500, min(700, total)
         else:
             raise ValueError(f"Unknown split: {split}. Use 'train' or 'test'.")
 
