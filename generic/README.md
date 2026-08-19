@@ -202,6 +202,31 @@ three centers, five whitening powers, then four ranks
 summary are saved, and the untouched 100-example command is printed but not
 executed. Use `--resume` after a disconnected runtime.
 
+### Paper-compatible BoolQ split
+
+Exactly 1,000 examples are sampled from the shuffled official BoolQ training
+split using seed 42. A question-wise 4:1 split provides 800 geometry-fitting
+and 200 development-validation examples. The complete official validation set
+of 3,270 examples remains untouched for final evaluation. Calibration extracts
+the exact `no` and `yes` candidate-token activations scored by evaluation.
+
+```bash
+python get_activations_generic.py --model_name Qwen2.5-3B-Instruct \
+  --dataset boolq --split train --num_samples 1000 --layer 19 \
+  --activation-positions scored --feature-dtype float16 --seed 42 \
+  --save_dir ./features_generic
+
+python sweep_ellipsoid_generic.py --dataset boolq \
+  --model-name Qwen2.5-3B-Instruct \
+  --feature-file ./features_generic/Qwen2.5-3B-Instruct_boolq_train_l19_scored.npz \
+  --layer 19 --stage all --output-dir ./sweeps_boolq_geometry \
+  --kappa 20 --alpha 0.8 --beta -0.8 --resume
+```
+
+The sweep evaluates only the 200 development-validation examples and prints,
+without executing, the frozen command for all 3,270 official validation
+examples.
+
 Baseline (no steering):
 
 ```bash

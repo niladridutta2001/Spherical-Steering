@@ -399,6 +399,15 @@ uses the same candidate-token activations whose summed conditional
 log-likelihood determines test accuracy.  Geometry and steering settings are
 frozen after validation before the single 100-example test evaluation.
 
+For BoolQ, 1,000 examples are sampled after shuffling the official training
+split with seed 42.  A question-wise $4:1$ division assigns 800 examples to
+geometry fitting and 200 to development validation.  The full official
+validation split of 3,270 examples is reserved for a single final evaluation.
+Both candidate answers (\texttt{no} and \texttt{yes}) are represented during
+calibration at exactly the token positions used for summed conditional
+log-likelihood scoring.  All geometry and intervention hyperparameters are
+selected exclusively using the 200-example validation subset.
+
 Each outer fold first assigns approximately half of the 817 questions to an
 untouched test set. Twenty percent of the remaining development half is used
 for validation and the other eighty percent for fitting. Thus the effective

@@ -48,3 +48,11 @@ def test_copa_development_split_is_320_80_and_reproducible():
     assert set(fit_a).isdisjoint(set(validation_a))
     assert np.array_equal(fit_a, fit_b)
     assert np.array_equal(validation_a, validation_b)
+
+
+def test_boolq_development_split_is_800_200():
+    q_indices = np.repeat(np.arange(1000), 2)
+    fit, validation = split_development_questions(q_indices, 0.2, 42)
+    assert len(fit) == 800
+    assert len(validation) == 200
+    assert set(fit).isdisjoint(set(validation))

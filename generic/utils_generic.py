@@ -83,6 +83,28 @@ def get_copa_scored_data(seed=42):
             np.asarray(answer_indices))
 
 
+def format_boolq_eval_prompt(passage, question):
+    """Prompt shared by BoolQ matched-token extraction and evaluation."""
+    return f"Passage: {passage}\nQuestion: {question}\nA:"
+
+
+def get_boolq_scored_data(num_samples=1000, seed=42):
+    """Return exact evaluation prompt/candidate pairs from shuffled BoolQ train."""
+    dataset = load_dataset("aps/super_glue", "boolq", split="train")
+    dataset = dataset.shuffle(seed=seed).select(range(min(num_samples, len(dataset))))
+    prompts, candidates, labels, q_indices, answer_indices = [], [], [], [], []
+    choices = ["no", "yes"]
+    for question_index, item in enumerate(dataset):
+        base = format_boolq_eval_prompt(item["passage"], item["question"])
+        correct = int(item["label"])
+        for answer_index, choice in enumerate(choices):
+            prompts.append(base); candidates.append(choice)
+            labels.append(int(answer_index == correct)); q_indices.append(question_index)
+            answer_indices.append(answer_index)
+    return (prompts, candidates, np.asarray(labels), np.asarray(q_indices),
+            np.asarray(answer_indices))
+
+
 def get_winogrande_scored_data(num_samples=1000, seed=42):
     """Return exact evaluation prompt/candidate pairs from shuffled train data."""
     dataset = load_dataset("allenai/winogrande", "winogrande_xl")['train']

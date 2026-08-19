@@ -24,6 +24,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from utils_generic import (HF_NAMES, set_seed, get_dataset_data, get_layer_activations,
                            get_winogrande_scored_data, get_mmlu_scored_data,
                            get_copa_scored_data, get_scored_activations)
+from utils_generic import get_boolq_scored_data
 
 
 def main():
@@ -63,8 +64,8 @@ def main():
 
     # 2. Load Data
     if args.activation_positions == 'scored':
-        if args.split != 'train' or args.dataset not in ('winogrande', 'mmlu_global', 'copa'):
-            raise ValueError('scored extraction supports WinoGrande, MMLU, or COPA train only')
+        if args.split != 'train' or args.dataset not in ('winogrande', 'mmlu_global', 'copa', 'boolq'):
+            raise ValueError('scored extraction supports WinoGrande, MMLU, COPA, or BoolQ train only')
         if args.dataset == 'winogrande':
             n = args.num_samples if args.num_samples is not None else 1000
             prompts, candidates, labels, q_indices, answer_indices = \
@@ -74,11 +75,16 @@ def main():
             n = args.num_samples if args.num_samples is not None else 500
             (prompts, candidates, labels, q_indices, answer_indices,
              category_indices) = get_mmlu_scored_data(tokenizer, args.seed, n)
-        else:
+        elif args.dataset == 'copa':
             if args.num_samples not in (None, 400):
                 raise ValueError('COPA scored extraction uses all 400 training questions')
             prompts, candidates, labels, q_indices, answer_indices = \
                 get_copa_scored_data(args.seed)
+            category_indices = None
+        else:
+            n = args.num_samples if args.num_samples is not None else 1000
+            prompts, candidates, labels, q_indices, answer_indices = \
+                get_boolq_scored_data(n, args.seed)
             category_indices = None
     else:
         prompts, labels, q_indices = get_dataset_data(

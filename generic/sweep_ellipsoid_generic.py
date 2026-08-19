@@ -119,7 +119,7 @@ def run_stage(stage, args, rows, output, selected_center=None, selected_power=No
             "prompt_format": str(data["prompt_format"].item()) if "prompt_format" in data else "legacy"}
     if metadata["activation_positions"] != "scored" or metadata["prompt_format"] != "match-evaluation":
         raise ValueError("the sweep requires matched scored-token features")
-    expected_questions = {"winogrande": 1000, "copa": 400}[args.dataset]
+    expected_questions = {"winogrande": 1000, "copa": 400, "boolq": 1000}[args.dataset]
     if metadata["dataset"] != args.dataset:
         raise ValueError(f"feature dataset {metadata['dataset']!r} does not match {args.dataset!r}")
     if metadata["dev_num_samples"] != expected_questions or len(np.unique(q)) != expected_questions:
@@ -172,7 +172,8 @@ def run_stage(stage, args, rows, output, selected_center=None, selected_power=No
 
 def main():
     parser = argparse.ArgumentParser(description="Validation-only generic ellipsoid sweep")
-    parser.add_argument("--dataset", choices=("winogrande", "copa"), default="winogrande")
+    parser.add_argument("--dataset", choices=("winogrande", "copa", "boolq"),
+                        default="winogrande")
     parser.add_argument("--model-name", required=True)
     parser.add_argument("--model-dir")
     parser.add_argument("--feature-file", required=True)

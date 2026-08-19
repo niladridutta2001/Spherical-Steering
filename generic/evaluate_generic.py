@@ -33,6 +33,7 @@ from steering_artifacts import load_steering_artifact, build_intervention
 from utils_generic import (HF_NAMES, MMLU_CATEGORIES, set_seed,
                            format_winogrande_eval_prompt, format_mmlu_eval_prompt,
                            format_copa_eval_prompt, get_mmlu_category_questions)
+from utils_generic import format_boolq_eval_prompt
 
 
 # ============================================================
@@ -61,7 +62,7 @@ def format_winogrande_prompt(sentence, option1, option2):
 
 
 def format_boolq_prompt(passage, question):
-    return f"Passage: {passage}\nQuestion: {question}\nA:"
+    return format_boolq_eval_prompt(passage, question)
 
 
 # ============================================================
@@ -289,10 +290,24 @@ def evaluate_winogrande(model, tokenizer, hook_fn, layer_name, device,
     return correct / total
 
 
-def evaluate_boolq(model, tokenizer, hook_fn, layer_name, device, steering_stats):
-    """Evaluate on BoolQ validation set. Options: ["no", "yes"]."""
-    print("Loading BoolQ validation set...")
-    dataset = load_dataset("aps/super_glue", "boolq", split="validation")
+def evaluate_boolq(model, tokenizer, hook_fn, layer_name, device, steering_stats,
+                   artifact, eval_split='official'):
+    """Evaluate on 200 development-validation or 3,270 official examples."""
+    if eval_split == 'dev-validation':
+        validation_ids = artifact.get('validation_q_indices')
+        if validation_ids is None or not len(validation_ids):
+            raise ValueError("artifact has no BoolQ development-validation split")
+        data_seed = int(artifact.get('data_seed') or 42)
+        n_development = int(artifact.get('dev_num_samples') or -1)
+        if n_development != 1000:
+            raise ValueError("BoolQ artifact must contain exactly 1,000 development questions")
+        dataset = load_dataset("aps/super_glue", "boolq", split="train").shuffle(seed=data_seed)
+        dataset = dataset.select(range(n_development))
+        dataset = dataset.select([int(value) for value in validation_ids])
+        print(f"Loading {len(dataset)} BoolQ development-validation examples...")
+    else:
+        print("Loading full official BoolQ validation set...")
+        dataset = load_dataset("aps/super_glue", "boolq", split="validation")
     print(f"Evaluating on {len(dataset)} samples...")
 
     options = ["no", "yes"]
@@ -340,8 +355,8 @@ def main():
                         default='official', help='development selection or frozen evaluation split')
 
     args = parser.parse_args()
-    if args.eval_split == 'dev-validation' and args.dataset not in ('winogrande', 'mmlu_global', 'copa'):
-        parser.error('--eval-split dev-validation supports WinoGrande, MMLU, and COPA')
+    if args.eval_split == 'dev-validation' and args.dataset not in ('winogrande', 'mmlu_global', 'copa', 'boolq'):
+        parser.error('--eval-split dev-validation supports WinoGrande, MMLU, COPA, and BoolQ')
     if args.eval_split == 'evaluation' and args.dataset != 'mmlu_global':
         parser.error('--eval-split evaluation is specific to MMLU')
     set_seed(args.seed)
@@ -384,16 +399,15 @@ def main():
         accuracy = evaluate_winogrande(model, tokenizer, hook_fn, layer_name, device,
                                        steering_stats, artifact, args.eval_split)
     elif args.dataset == 'boolq':
-        if args.eval_split != 'official':
-            raise ValueError('--eval-split dev-validation is currently supported only for winogrande')
-        accuracy = evaluate_boolq(model, tokenizer, hook_fn, layer_name, device, steering_stats)
+        accuracy = evaluate_boolq(model, tokenizer, hook_fn, layer_name, device,
+                                  steering_stats, artifact, args.eval_split)
 
     # Print results
     print("\n" + "=" * 50)
     print("FINAL RESULTS")
     print("=" * 50)
     print(f"Dataset:    {args.dataset}")
-    if args.dataset in ('winogrande', 'mmlu_global', 'copa'):
+    if args.dataset in ('winogrande', 'mmlu_global', 'copa', 'boolq'):
         print(f"Eval split: {args.eval_split}")
     print(f"Model:      {args.model_name}")
     print(f"Layer:      {args.layer}")
